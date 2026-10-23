@@ -18,6 +18,23 @@ export const DEFAULT_HABITS = [
   { name: 'No nail biting',   emoji: '✋', section: 'night',   kind: 'avoid', xp: 25 },
 ].map((h, i) => ({ target: 1, unit: null, auto_steps: false, days: ALL_DAYS, ...h, sort_order: i }));
 
+// One-tap ideas shown to accounts with few quests. Nothing is added unless the person taps it.
+export const STARTERS = [
+  { name: 'Drink water',     emoji: '💧', section: 'day',     kind: 'count',  target: 8,  unit: 'glasses', xp: 10 },
+  { name: 'Walk',            emoji: '🚶', section: 'day',     kind: 'check',  xp: 10 },
+  { name: 'Work out',        emoji: '🏋️', section: 'day',     kind: 'timer',  target: 20, unit: 'min', xp: 25 },
+  { name: 'Read',            emoji: '📖', section: 'day',     kind: 'timer',  target: 20, unit: 'min', xp: 25 },
+  { name: 'Meditate',        emoji: '🧘', section: 'morning', kind: 'timer',  target: 10, unit: 'min', xp: 10 },
+  { name: 'Brush teeth',     emoji: '🪥', section: 'morning', kind: 'check',  xp: 5 },
+  { name: 'Supplements',     emoji: '💊', section: 'morning', kind: 'check',  xp: 5 },
+  { name: 'Eat a fruit',     emoji: '🍎', section: 'day',     kind: 'check',  xp: 10 },
+  { name: 'Call home',       emoji: '👪', section: 'day',     kind: 'check',  xp: 10 },
+  { name: 'Talk to a friend',emoji: '💬', section: 'day',     kind: 'people', xp: 10 },
+  { name: 'Journal',         emoji: '✍️', section: 'night',   kind: 'check',  xp: 10 },
+  { name: 'No junk food',    emoji: '🍟', section: 'night',   kind: 'avoid',  xp: 25 },
+  { name: 'In bed by 12',    emoji: '🛏️', section: 'night',   kind: 'check',  xp: 10 },
+].map(h => ({ target: 1, unit: null, auto_steps: false, days: ALL_DAYS, ...h }));
+
 export const DEFAULT_SETTINGS = {
   tz: 'Asia/Kolkata',
   remind_morning: '12:00',
@@ -128,14 +145,15 @@ export class SupabaseBackend {
 // ======================================================================
 // Demo: realistic fake history, same rules as the database.
 export class DemoBackend {
-  constructor({ days = 45, seed = 7 } = {}) {
-    this.user = { id: 'demo-user', email: 'you@example.com' };
+  constructor({ days = 45, seed = 7, empty = false } = {}) {
+    this.user = { id: empty ? 'demo-new-user' : 'demo-user', email: empty ? 'friend@example.com' : 'you@example.com' };
     this.signedIn = true;
     this.rand = mulberry32(seed);
     this.historyDays = days;
-    this.#build();
+    if (empty) { this.settings = null; this.habits = []; this.entries = new Map(); this.days = new Map(); }
+    else this.#build();
   }
-  #today() { return nowIn(this.settings.tz).day; }
+  #today() { return nowIn(this.settings?.tz || DEFAULT_SETTINGS.tz).day; }
   #build() {
     const tz = DEFAULT_SETTINGS.tz;
     const today = nowIn(tz).day;
@@ -181,13 +199,13 @@ export class DemoBackend {
   async loadAll() {
     await delay(120);
     return {
-      settings: structuredClone(this.settings),
+      settings: this.settings ? structuredClone(this.settings) : null,
       habits: structuredClone(this.habits),
       entries: structuredClone([...this.entries.values()]),
       days: structuredClone([...this.days.values()]),
     };
   }
-  async createSettings(v) { this.settings = { user_id: this.user.id, ...v }; return structuredClone(this.settings); }
+  async createSettings(v) { this.settings = { user_id: this.user.id, created_at: new Date(clock.now()).toISOString(), ...v }; return structuredClone(this.settings); }
   async updateSettings(_uid, patch) { Object.assign(this.settings, patch); return structuredClone(this.settings); }
   async insertHabits(rows) {
     const today = this.#today();

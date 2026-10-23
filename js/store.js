@@ -1,7 +1,7 @@
 // 1440 · local-first store.
 // Ticks apply instantly on the phone, are cached, and sync in the background.
 import { computeHistory, evaluate, nowIn, sortHabits, isActive } from './logic.js';
-import { DEFAULT_HABITS, DEFAULT_SETTINGS, isNetworkError, ruleMessage } from './backend.js';
+import { DEFAULT_SETTINGS, isNetworkError, ruleMessage } from './backend.js';
 
 const key = (habitId, day) => habitId + '|' + day;
 
@@ -114,17 +114,11 @@ export class Store extends EventTarget {
 
   async #ensureSetup() {
     if (!this.online) return;
+    // A new account gets its own settings and no quests. Existing accounts are left as they are.
     if (!this.settings) {
-      this.settings = await this.backend.createSettings({ ...DEFAULT_SETTINGS });
-    }
-    if (!this.settings.prefs?.seeded) {
-      if (this.habits.length === 0) {
-        const made = await this.backend.insertHabits(DEFAULT_HABITS.map(({ id, ...h }) => h));
-        this.habits.push(...made);
-      }
-      this.settings = await this.backend.updateSettings(this.user.id, {
-        prefs: { ...(this.settings.prefs || {}), seeded: true },
-      });
+      let tz = DEFAULT_SETTINGS.tz;
+      try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || tz; } catch {}
+      this.settings = await this.backend.createSettings({ ...DEFAULT_SETTINGS, tz, prefs: { seeded: true } });
     }
     this.persist();
     this.emit('setup');

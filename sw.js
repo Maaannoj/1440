@@ -1,6 +1,6 @@
 // 1440 · service worker: lets the app open offline.
 // Network first (so updates arrive right away), cached copy when offline.
-const VERSION = '1440-v3-audio';
+const VERSION = '1440-v4-friends';
 const SHELL = [
   './', './index.html', './styles.css', './config.js', './manifest.webmanifest',
   './vendor/supabase.js',

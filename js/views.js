@@ -3,6 +3,7 @@
 import { addDays, dow, habitRate, overallRate, progressOf, rankFor, RANKS, AVOID_CONFIRM_MINUTE, SHIELD_MAX, ALL_DAYS } from './logic.js';
 import { LOOKS } from './themes.js';
 import { TRACKS } from './audio.js';
+import { STARTERS } from './backend.js';
 
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const num = (n) => Number(n).toLocaleString('en-IN');
@@ -212,7 +213,36 @@ export function questsHtml(ctx) {
       <h2 class="sec-head" data-key="head-${sec}"><span>${sec === 'day' ? 'Day quests' : SECTION[sec]}</span><span class="sec-n">${d}/${list.length}</span></h2>
       ${list.map((h, k) => questRow(h, ctx, start + k)).join('')}
     </section>`;
-  }).join('') || `<div class="block" data-key="empty"><p class="block-text">No quests scheduled today.</p><div class="sheet-actions"><button class="btn" data-act="habit-add">Add a quest</button></div></div>`;
+  }).join('') || (ctx.store.activeHabits().length
+    ? `<div class="block" data-key="rest"><p class="block-text">Rest day. No quests are scheduled today.</p></div>`
+    : `<div data-key="welcome">${welcome(ctx)}</div>`);
+}
+
+
+// ---------- starter ideas (for accounts with few quests) ----------
+export function startersBlock(ctx, { title, text } = {}) {
+  const have = new Set(ctx.store.habits.filter(h => !h.archived_on).map(h => h.name.trim().toLowerCase()));
+  const list = STARTERS.map((s, i) => ({ s, i })).filter(({ s }) => !have.has(s.name.toLowerCase()));
+  if (!list.length) return '';
+  return `<section class="block starters" aria-label="Quest ideas">
+    ${title ? `<h2 class="block-title">${title}</h2>` : ''}
+    ${text ? `<p class="hint starters-text">${text}</p>` : ''}
+    <div class="starter-grid">${list.map(({ s, i }) => `
+      <button class="starter${ctx.ui.adding.has(s.name) ? ' is-adding' : ''}" data-act="starter:${i}" aria-label="Add ${esc(s.name)}">
+        <em class="emo" aria-hidden="true" style="--i:${i}">${s.emoji}</em>
+        <span class="starter-txt"><b>${esc(s.name)}</b><small>${s.kind === 'timer' ? s.target + ' min' : s.kind === 'count' ? '×' + s.target : KIND[s.kind][0]} · ${s.xp} XP</small></span>
+        <span class="starter-plus" aria-hidden="true">+</span>
+      </button>`).join('')}</div>
+  </section>`;
+}
+function welcome(ctx) {
+  return `<section class="welcome">
+    <p class="welcome-k">New run</p>
+    <h2 class="welcome-title">Pick your first quests</h2>
+    <p class="welcome-text">Tap any idea to add it, or make your own. You can rename, change or remove anything later.</p>
+    <button class="btn" data-act="habit-add">Make your own quest</button>
+  </section>
+  ${startersBlock(ctx, { title: 'Quest ideas' })}`;
 }
 
 // ---------- Today ----------
@@ -229,6 +259,7 @@ export function today(ctx) {
     <div class="core-row"><span class="core-q">Quests <b id="core-done">${s.done}</b>/<span id="core-total">${s.total}</span></span><span class="combo" id="combo" aria-live="polite"></span></div>
   </section>
   <div class="quests" id="quests">${questsHtml(ctx)}</div>
+  ${(() => { const n = ctx.store.activeHabits().length; return n > 0 && n < 4 ? startersBlock(ctx, { title: 'Add more quests', text: 'Most people start with 3 to 6. Tap to add.' }) : ''; })()}
   ${syncLine(ctx)}`;
 }
 export function syncLine(ctx) {
@@ -351,7 +382,8 @@ export function quests(ctx) {
       ${ui.reorder ? '' : '<button class="chip-btn is-strong" data-act="habit-add">Add</button>'}
     </div>
   </div>
-  <div class="list">${groups || '<div class="block"><p class="block-text">No quests yet.</p><div class="sheet-actions"><button class="btn" data-act="habit-add">Add a quest</button></div></div>'}</div>
+  <div class="list">${groups || `<div class="block"><p class="block-text">No quests yet. Make your own or tap an idea below.</p><div class="sheet-actions"><button class="btn" data-act="habit-add">Make your own quest</button></div></div>`}</div>
+  ${active.length < 8 ? startersBlock(ctx, { title: 'Quest ideas', text: 'Tap to add. Each one starts today.' }) : ''}
   ${archived.length ? `<section class="archived">
     <button class="link" data-act="archived">${ui.showArchived ? 'Hide' : 'Show'} archived quests (${archived.length})</button>
     ${ui.showArchived ? archived.map((h, i) => `<button class="q is-list" data-act="habit:${h.id}" style="--i:${i}">

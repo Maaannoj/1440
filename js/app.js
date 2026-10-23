@@ -1,7 +1,7 @@
 // 1440 · app controller: boot, navigation, ticking, rewards, timers.
 // Smoothness rules: the screen is rebuilt only on tab changes; a tick patches just
 // the rows and numbers that changed, so looping animations never restart.
-import { SupabaseBackend, DemoBackend, ruleMessage, isNetworkError } from './backend.js';
+import { SupabaseBackend, DemoBackend, STARTERS, ruleMessage, isNetworkError } from './backend.js';
 import { Store } from './store.js';
 import { clock, AVOID_CONFIRM_MINUTE, rankFor } from './logic.js';
 import * as V from './views.js';
@@ -14,8 +14,9 @@ const DEMO = params.has('demo');
 if (params.get('now')) clock.setNow(params.get('now'));
 
 const cfg = window.APP_CONFIG || {};
-const backend = DEMO ? new DemoBackend() : new SupabaseBackend(cfg.supabaseUrl, cfg.supabaseKey);
-const store = new Store(backend, { cachePrefix: DEMO ? '1440demo' : '1440' });
+const DEMO_NEW = params.get('demo') === 'new';
+const backend = DEMO ? new DemoBackend({ empty: DEMO_NEW }) : new SupabaseBackend(cfg.supabaseUrl, cfg.supabaseKey);
+const store = new Store(backend, { cachePrefix: DEMO ? (DEMO_NEW ? '1440demonew' : '1440demo') : '1440' });
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const main = $('#main');
@@ -40,7 +41,7 @@ const ui = {
   tab: ['today', 'log', 'quests', 'me'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'today',
   calMonth: null, reorder: false, showArchived: false,
   expanded: new Set(), sheet: null, confirm: null, booted: false,
-  combo: 0, lastTickAt: -1e9, shownLevel: null,
+  combo: 0, lastTickAt: -1e9, shownLevel: null, adding: new Set(),
 };
 window.__1440 = { store, backend, clock, ui, fx }; // for debugging
 
@@ -333,6 +334,18 @@ const actions = {
   habit(id) { openSheet('habit', id); },
   edit(id) { openSheet('form', id); },
   'habit-add'() { openSheet('form', null); },
+  async starter(i) {
+    const s = STARTERS[Number(i)];
+    if (!s || ui.adding.has(s.name)) return;
+    const chip = document.querySelector(`[data-act="starter:${i}"]`);
+    const r = chip?.getBoundingClientRect();
+    ui.adding.add(s.name); chip?.classList.add('is-adding');
+    const ok = await guard(() => store.addHabit({ ...s }));
+    ui.adding.delete(s.name);
+    if (!ok) { chip?.classList.remove('is-adding'); return; }
+    if (r) { fx.burst(r.left + r.width / 2, r.top + r.height / 2, { count: 14 }); fx.floatText(r.left + r.width / 2, r.top - 4, `+ ${s.name}`, 'flt-small'); }
+    audio.play('cleared'); fx.haptic();
+  },
   reorder() { ui.reorder = !ui.reorder; render(); },
   archived() { ui.showArchived = !ui.showArchived; render(); },
   async 'move-up'(id) { await guard(() => store.moveHabit(id, -1)); },

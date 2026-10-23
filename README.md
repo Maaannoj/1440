@@ -34,9 +34,29 @@ changed, and Calm mode freezes the background to save battery.
 - Every hour, a job records each finished day's misses permanently.
 - Every row is private to the logged-in user.
 
+## Adding a friend
+
+Sign-ups are off, so accounts are created by hand:
+
+1. Supabase → Authentication → Users → Add user → Create new user.
+2. Enter their email and a temporary password, tick **Auto Confirm User**, and create.
+3. Send them the link, email and password. They change the password under Me → Change password.
+
+New accounts start empty, with one-tap quest ideas. Nothing from other accounts is copied.
+Every row is locked to its owner, so friends can't see each other's data in the app.
+The project owner can see all data in the Supabase dashboard.
+
+To reset a forgotten password, run this in the SQL editor:
+
+```sql
+update auth.users
+set encrypted_password = extensions.crypt('NEW-PASSWORD', extensions.gen_salt('bf', 10)), updated_at = now()
+where email = 'friend@example.com';
+```
+
 ## Try it without logging in
 
-Open the site with `?demo` on the end for 45 days of fake history. Add `&look=neon` (or any look) to jump to a theme.
+Open the site with `?demo` on the end for 45 days of fake history, or `?demo=new` to see what a brand-new account looks like. Add `&look=neon` (or any look) to jump to a theme.
 
 ## Updating
 

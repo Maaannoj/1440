@@ -744,6 +744,31 @@ body.has-sheet .toast { bottom: auto; top: calc(var(--safe-t) + 10px); }
 @keyframes eq { 0%, 100% { transform: scaleY(.3); } 50% { transform: scaleY(1); } }
 .now-playing { margin: 2px 0 0; font: 400 12px/1.4 var(--f-mono), monospace; color: var(--p); letter-spacing: .06em; }
 
+
+/* ---------- welcome + starter ideas ---------- */
+.welcome { position: relative; margin-top: 4px; padding: 20px 16px 16px; display: grid; gap: 8px; text-align: left;
+  background: var(--panel); border: 1px solid rgba(var(--p-rgb), .45); border-radius: var(--r);
+  clip-path: var(--noclip, polygon(0 0, calc(100% - var(--cut)) 0, 100% var(--cut), 100% 100%, var(--cut) 100%, 0 calc(100% - var(--cut)))); }
+.welcome::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--p); box-shadow: 0 0 12px var(--p); }
+.welcome-k { margin: 0; font: 400 12px/1 var(--f-mono), monospace; letter-spacing: .2em; text-transform: uppercase; color: var(--s); }
+.welcome-title { margin: 0; font: var(--dw) calc(26px * var(--ds))/1.05 var(--f-disp), sans-serif; letter-spacing: .04em; text-transform: uppercase; text-wrap: balance; }
+.welcome-text { margin: 0 0 6px; font: var(--bw) calc(15px * var(--bs))/1.4 var(--f-body), sans-serif; color: var(--ink-2); max-width: 36ch; }
+.starters { display: grid; gap: 10px; }
+.starters .block-title { margin-bottom: 0; }
+.starters-text { margin: 0; }
+.starter-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.starter { position: relative; display: grid; grid-template-columns: 26px minmax(0, 1fr) 14px; align-items: center; gap: 7px; min-height: 60px; padding: 8px 8px 8px 7px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: max(0px, calc(var(--r) - 6px)); color: var(--ink); transition: transform .12s, opacity .2s, border-color .2s; }
+.starter:active { transform: scale(.96); border-color: var(--p); }
+.starter .emo { font-size: 22px; text-align: center; animation: bob 2s ease-in-out infinite; animation-delay: calc(var(--i) * -.37s); }
+.starter-txt { display: grid; gap: 3px; min-width: 0; }
+.starter-txt b { font: var(--bw) calc(14px * var(--bs))/1.08 var(--f-body), sans-serif; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: break-word; hyphens: auto; -webkit-hyphens: auto; }
+.starter-txt small { font: 400 11px/1.2 var(--f-mono), monospace; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.starter-plus { font: 400 20px/1 var(--f-mono), monospace; color: var(--p); text-align: center; }
+.starter.is-adding { opacity: .45; pointer-events: none; }
+.starter.is-adding .starter-plus { animation: spin 1s linear infinite; }
+:root[data-calm="1"] .starter .emo { animation-play-state: paused; }
+
 /* ---------- calm mode, hidden app, reduced motion ---------- */
 :root[data-calm="1"] .bk > *, :root[data-calm="1"] .bk > * > *, :root[data-calm="1"] .q-emo .emo, :root[data-calm="1"] .cl-emos .emo,
 :root[data-calm="1"] .dial-l, :root[data-calm="1"] .strip-run, :root[data-calm="1"] .strip-text, :root[data-calm="1"] .glitch::before, :root[data-calm="1"] .glitch::after,
