@@ -7,6 +7,7 @@ import { clock, AVOID_CONFIRM_MINUTE, rankFor } from './logic.js';
 import * as V from './views.js';
 import * as fx from './fx.js';
 import { readDevicePrefs, writeDevicePrefs, applyDevicePrefs, buildBackdrop, lookTransition, LOOKS } from './themes.js';
+import { audio } from './audio.js';
 
 const params = new URLSearchParams(location.search);
 const DEMO = params.has('demo');
@@ -27,7 +28,12 @@ const device = readDevicePrefs();
 if (params.get('look')) device.look = params.get('look');
 applyDevicePrefs(device);
 buildBackdrop(bk, document.documentElement.dataset.look);
-fx.sound.on = !!device.sound;
+audio.sfxOn = !!device.sound;
+audio.musicOn = !!device.music;
+audio.look = document.documentElement.dataset.look;
+writeDevicePrefs(device);
+// browsers only allow sound after a tap, so the first tap anywhere wakes the audio
+document.addEventListener('pointerdown', () => audio.unlock(), { capture: true });
 
 const ui = {
   demo: DEMO,
@@ -189,7 +195,7 @@ function openSheet(type, arg) {
   if (!wasOpen) toastEl.classList.remove('is-on');
   sheetRoot.innerHTML = `<div class="sheet-backdrop" data-act="sheet-close"></div>
     <div class="sheet" role="dialog" aria-modal="true" aria-label="${type}"><div class="sheet-grip" aria-hidden="true"></div>${html}</div>`;
-  if (!wasOpen) { sheetRoot.getBoundingClientRect(); sheetRoot.classList.add('is-open'); }
+  if (!wasOpen) { sheetRoot.getBoundingClientRect(); sheetRoot.classList.add('is-open'); audio.play('open'); }
   document.body.classList.add('has-sheet');
   const kind = sheetRoot.querySelector('input[name="kind"]:checked');
   if (kind) syncKindFields(kind.form);
@@ -211,7 +217,7 @@ function toast(text, action) {
   toastEl.classList.add('is-on');
   toastTimer = setTimeout(() => toastEl.classList.remove('is-on'), action ? 4500 : 2600);
 }
-function undoFor(id, day, prev) { return { label: 'Undo', run: () => { store.setEntry(id, day, prev.value, prev.meta); fx.sound.play('untick'); } }; }
+function undoFor(id, day, prev) { return { label: 'Undo', run: () => { store.setEntry(id, day, prev.value, prev.meta); audio.play('untick'); } }; }
 
 // ---------- rewards ----------
 function sectionDone(h, hist, day) {
@@ -229,8 +235,8 @@ function reward(h, before, point) {
   const t = performance.now();
   ui.combo = t - ui.lastTickAt < 4000 ? ui.combo + 1 : 1;
   ui.lastTickAt = t;
-  if (ui.combo >= 2) { fx.badge($('#combo'), `Combo ×${ui.combo}`); fx.sound.play('combo', ui.combo); }
-  else fx.sound.play('tick');
+  if (ui.combo >= 2) { fx.badge($('#combo'), `Combo ×${ui.combo}`); audio.play('combo', ui.combo); }
+  else audio.play('tick');
   fx.haptic();
 
   const segs = $('#segs');
@@ -240,12 +246,12 @@ function reward(h, before, point) {
 
   const wasPerfect = before.perDay.get(day)?.perfect, isPerfect = after.perDay.get(day)?.perfect;
   if (!(isPerfect && !wasPerfect) && sectionDone(h, after, day) && !sectionDone(h, before, day)) {
-    setTimeout(() => { fx.stamp(`${V.SECTION[h.section]} cleared`); fx.sound.play('cleared'); }, 260);
+    setTimeout(() => { fx.stamp(`${V.SECTION[h.section]} cleared`); audio.play('cleared'); }, 260);
   }
   if (isPerfect && !wasPerfect) {
     setTimeout(() => {
       fx.moment({ kind: 'perfect', title: 'Perfect day', big: '+50', sub: 'Bonus XP', foot: `Perfect streak: ${after.perfect.current} day${after.perfect.current === 1 ? '' : 's'}` });
-      fx.sound.play('perfect'); fx.haptic(3);
+      audio.play('perfect'); fx.haptic(3);
     }, 700);
   }
   if (after.level.level > before.level.level) {
@@ -253,7 +259,7 @@ function reward(h, before, point) {
     setTimeout(() => {
       fx.moment({ kind: 'level', title: 'Level up', big: String(after.level.level).padStart(2, '0'),
         sub: newRank ? `New rank: ${r.name}` : r.name, foot: `${(after.level.next - after.level.xp).toLocaleString('en-IN')} XP to level ${after.level.level + 1}` });
-      fx.sound.play('level'); fx.haptic(3);
+      audio.play('level'); fx.haptic(3);
     }, 750);
   }
 }
@@ -272,7 +278,7 @@ function tickHabit(id) {
   if (h.kind === 'timer') return openSheet('timer', id);
   if (h.kind === 'people') return openSheet('people', id);
   if (h.kind === 'avoid' && !e?.done && now.minutes < AVOID_CONFIRM_MINUTE) {
-    fx.pop($(`.q[data-key="${id}"]`), 'shake'); fx.sound.play('deny');
+    fx.pop($(`.q[data-key="${id}"]`), 'shake'); audio.play('deny');
     toast('You can confirm a clean day after 8 PM.');
     return;
   }
@@ -299,11 +305,11 @@ function tickHabit(id) {
       }
     }, 1300);
   } else if (next > 0) {
-    fx.sound.play('step', next); fx.haptic();
+    audio.play('step', next); fx.haptic();
     if (point) fx.floatText(point.x, point.y - 26, `${next}/${h.target}`, 'flt-small');
     toast(`${h.name}: ${next} of ${h.target}`, undoFor(id, day, prev));
   } else {
-    fx.sound.play('untick'); fx.haptic();
+    audio.play('untick'); fx.haptic();
     toast(`${h.name} unticked`, undoFor(id, day, prev));
   }
 }
@@ -318,7 +324,7 @@ const actions = {
     window.scrollTo(0, 0);
     if (name === 'today') introDial();
     main.animate([{ opacity: 0, transform: 'translateY(12px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: 'cubic-bezier(.2,.9,.2,1)' });
-    fx.haptic();
+    fx.haptic(); audio.play('tab');
   },
   tick: tickHabit,
   expand(sec) { ui.expanded.add(sec); patchToday(); },
@@ -345,7 +351,7 @@ const actions = {
   'confirm-yes'() { const run = ui.confirm; ui.confirm = null; run?.(); },
   'sheet-close'() { closeSheet(); },
   'toast-action'() { const run = toastEl._action; toastEl.classList.remove('is-on'); run?.(); fx.haptic(); },
-  'timer-start'(id) { startTimer(id); fx.sound.play('step', 3); fx.haptic(); refreshSheet(); patchToday(); },
+  'timer-start'(id) { startTimer(id); audio.play('step', 3); fx.haptic(); refreshSheet(); patchToday(); },
   'timer-pause'() { pauseTimer(); fx.haptic(); refreshSheet(); patchToday(); },
   'timer-add'(id) {
     const h = store.habit(id); const day = store.today(); const e = store.entry(id, day);
@@ -358,7 +364,7 @@ const actions = {
       const r = $('.timer')?.getBoundingClientRect();
       reward(h, before, r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null);
       toast(`${h.name} done`, undoFor(id, day, prev));
-    } else { fx.sound.play('step', 2); fx.haptic(); }
+    } else { audio.play('step', 2); fx.haptic(); }
   },
   'timer-reset'(id) {
     const h = store.habit(id);
@@ -368,7 +374,7 @@ const actions = {
       openSheet('timer', id);
     });
   },
-  'people-clear'(id) { store.setEntry(id, store.today(), 0, {}); closeSheet(); fx.sound.play('untick'); },
+  'people-clear'(id) { store.setEntry(id, store.today(), 0, {}); closeSheet(); audio.play('untick'); },
   password() { openSheet('password'); },
   logout() {
     const pending = store.outbox.length;
@@ -378,15 +384,18 @@ const actions = {
   look(id) {
     if (device.look === id || !LOOKS.some(l => l.id === id)) return;
     device.look = id; writeDevicePrefs(device);
-    fx.sound.play('switch'); fx.haptic(2);
+    audio.play('switch'); fx.haptic(2);
+    audio.setLook(id);
     lookTransition(() => { applyDevicePrefs(device); buildBackdrop(bk, id); render(); });
     if (store.settings && !DEMO) store.updateSettings({ prefs: { ...(store.settings.prefs || {}), look: id } }).catch(() => {});
   },
   toggle(which) {
     device[which] = !device[which]; writeDevicePrefs(device);
-    if (which === 'sound') { fx.sound.on = device.sound; if (device.sound) fx.sound.play('tick'); }
+    if (which === 'sound') { audio.sfxOn = device.sound; if (device.sound) audio.play('tick'); }
+    if (which === 'music') { audio.musicOn = device.music; if (device.music) { audio.unlock(); audio.startMusic(); } else audio.stopMusic(); }
     applyDevicePrefs(device);
-    const sw = $(`[data-act="toggle:${which}"]`); sw?.setAttribute('aria-checked', String(device[which]));
+    document.querySelectorAll(`[data-act="toggle:${which}"]`).forEach(el =>
+      el.setAttribute(el.getAttribute('role') === 'switch' ? 'aria-checked' : 'aria-pressed', String(device[which])));
     fx.haptic();
   },
   async retry() { await boot(); },
@@ -441,7 +450,7 @@ const forms = {
     const fields = { name, kind, target, days, emoji: form.emoji.value.trim() || null,
       section: form.querySelector('input[name="section"]:checked').value,
       xp: Number(form.querySelector('input[name="xp"]:checked').value), unit: kind === 'timer' ? 'min' : null };
-    if (await guard(() => (id ? store.updateHabit(id, fields) : store.addHabit(fields)))) { closeSheet(); toast(id ? 'Quest saved' : `${name} added`); fx.sound.play('cleared'); }
+    if (await guard(() => (id ? store.updateHabit(id, fields) : store.addHabit(fields)))) { closeSheet(); toast(id ? 'Quest saved' : `${name} added`); audio.play('cleared'); }
   },
   people(form) {
     const id = form.dataset.id;
@@ -519,6 +528,7 @@ setInterval(() => { if (store.user) store.flush(); }, 20000);
 addEventListener('online', () => store.flush());
 document.addEventListener('visibilitychange', async () => {
   document.documentElement.classList.toggle('is-away', document.hidden);
+  if (document.hidden) audio.suspend(); else audio.resume();
   if (document.hidden || !store.user) return;
   if (Date.now() - store.lastRefresh > 60000) await store.refresh().catch(() => {});
   store.flush();
@@ -526,7 +536,7 @@ document.addEventListener('visibilitychange', async () => {
 
 store.addEventListener('change', (ev) => {
   const d = ev.detail;
-  if (d && d.type === 'rejected') { toast(d.message); fx.sound.play('deny'); return; }
+  if (d && d.type === 'rejected') { toast(d.message); audio.play('deny'); return; }
   if (!ui.booted) return;
   if (d === 'sync' || d === 'synced' || d === 'offline') { updateSyncLine(); return; }
   if (d === 'tick' || d === 'refresh') { if (ui.tab === 'today') patchToday(); else render(); if (ui.sheet?.type === 'day' || ui.sheet?.type === 'habit') refreshSheet(); return; }
@@ -545,7 +555,7 @@ async function startApp(user) {
   catch (err) { toast(ruleMessage(err) || err.message || 'Couldn\'t load your data.'); }
   const serverLook = store.settings?.prefs?.look;
   if (serverLook && !localStorage.getItem('1440:device') && serverLook !== device.look) {
-    device.look = serverLook; writeDevicePrefs(device); applyDevicePrefs(device); buildBackdrop(bk, serverLook);
+    device.look = serverLook; writeDevicePrefs(device); applyDevicePrefs(device); buildBackdrop(bk, serverLook); audio.setLook(serverLook);
   }
   render();
   if (ui.tab === 'today') introDial();

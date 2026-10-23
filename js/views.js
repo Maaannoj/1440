@@ -2,6 +2,7 @@
 // Elements that change on a tick carry data-key so the app can patch them in place.
 import { addDays, dow, habitRate, overallRate, progressOf, rankFor, RANKS, AVOID_CONFIRM_MINUTE, SHIELD_MAX, ALL_DAYS } from './logic.js';
 import { LOOKS } from './themes.js';
+import { TRACKS } from './audio.js';
 
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const num = (n) => Number(n).toLocaleString('en-IN');
@@ -140,6 +141,8 @@ function dial(ctx, s) {
       <defs>
         <linearGradient id="g-neon" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF35CF"/><stop offset="1" stop-color="#33F2FF"/></linearGradient>
         <linearGradient id="g-holo" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8FF3FF"/><stop offset=".5" stop-color="#C79BFF"/><stop offset="1" stop-color="#FF9AE6"/></linearGradient>
+        <linearGradient id="g-vapor" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF71CE"/><stop offset=".5" stop-color="#B967FF"/><stop offset="1" stop-color="#01CDFE"/></linearGradient>
+        <linearGradient id="g-chrome" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset=".48" stop-color="#9AA5B3"/><stop offset=".52" stop-color="#E9EEF3"/><stop offset="1" stop-color="#7D8896"/></linearGradient>
       </defs>
       <g class="segs" id="segs" data-total="${s.total}">${segments(s.total, s.done, s.part)}</g>
       <circle class="time-track" cx="${c}" cy="${c}" r="${rTime}"/>
@@ -218,7 +221,10 @@ export function today(ctx) {
   return `
   ${hud(ctx)}
   <section class="core">
-    <p class="core-date" id="core-date">${dateText(ctx.now.day, ctx.now)}</p>
+    <div class="core-top">
+      <p class="core-date" id="core-date">${dateText(ctx.now.day, ctx.now)}</p>
+      <button class="music-btn" data-act="toggle:music" aria-pressed="${!!ctx.device.music}" aria-label="Music"><i></i><i></i><i></i><i></i></button>
+    </div>
     ${dial(ctx, s)}
     <div class="core-row"><span class="core-q">Quests <b id="core-done">${s.done}</b>/<span id="core-total">${s.total}</span></span><span class="combo" id="combo" aria-live="polite"></span></div>
   </section>
@@ -525,8 +531,12 @@ export function me(ctx) {
   </section>
 
   <section class="block"><h2 class="block-title">Effects</h2>
-    <div class="switch-row"><div><b>Sound effects</b><span>Blips for ticks, combos and level-ups. Follows your silent switch.</span></div>
+    <div class="switch-row"><div><b>Sound effects</b><span>Ticks, combos, cleared sections and level-ups, in your theme's sound.</span></div>
       <button class="sw" role="switch" aria-checked="${device.sound}" aria-label="Sound effects" data-act="toggle:sound"></button></div>
+    <div class="switch-row"><div><b>Music</b><span>Every theme has its own track, made live on your phone.</span>
+      <p class="now-playing">♪ ${esc((TRACKS[device.look] || TRACKS.redline).name)}</p></div>
+      <button class="sw" role="switch" aria-checked="${!!device.music}" aria-label="Music" data-act="toggle:music"></button></div>
+    <p class="hint">Sound follows your ring/silent switch. If you hear nothing, flip it to ring.</p>
     <div class="switch-row"><div><b>Calm mode</b><span>Freezes the background and idle motion to save battery. Rewards still play.</span></div>
       <button class="sw" role="switch" aria-checked="${device.calm}" aria-label="Calm mode" data-act="toggle:calm"></button></div>
   </section>

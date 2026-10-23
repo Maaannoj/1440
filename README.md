@@ -4,9 +4,11 @@ A personal daily quest tracker for iPhone, installed from Safari as a home-scree
 There are 1440 minutes in a day; anything not ticked by midnight counts as a miss, permanently.
 
 It plays like a game: XP, levels and ranks, combos, streak shields, cleared sections,
-perfect-day and level-up moments, and five switchable looks (Redline, Overdrive, Neon,
-Terminal, Hologram). All motion is GPU-only (transform and opacity), a tick patches only
-the rows that changed, and Calm mode freezes the background to save battery.
+perfect-day and level-up moments, and ten switchable looks (Redline, Overdrive, Neon,
+Terminal, Hologram, Vapor, Toxic, Arctic, Ronin, Chrome). Each look has its own music
+track and sound-effect voice, synthesized live with Web Audio (no audio files).
+All motion is GPU-only (transform and opacity), a tick patches only the rows that
+changed, and Calm mode freezes the background to save battery.
 
 ## What's in here
 
@@ -17,7 +19,8 @@ the rows that changed, and Calm mode freezes the background to save battery.
 | `js/store.js` | Local-first data: ticks apply instantly and sync in the background |
 | `js/backend.js` | Supabase connection, plus a demo backend with fake history |
 | `js/views.js`, `js/app.js` | Screens and interactions |
-| `js/themes.js`, `js/fx.js` | The five looks and their backdrops; particles, overlays, sounds, haptics |
+| `js/themes.js`, `js/fx.js` | The ten looks and their backdrops; particles, overlays, haptics |
+| `js/audio.js` | Sound effects and the ten procedural music tracks |
 | `fonts/` | Bundled fonts so every look works offline |
 | `config.js` | Supabase project URL and publishable key (public by design) |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Offline support and home-screen install |
