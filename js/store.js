@@ -118,7 +118,7 @@ export class Store extends EventTarget {
     if (!this.settings) {
       let tz = DEFAULT_SETTINGS.tz;
       try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || tz; } catch {}
-      this.settings = await this.backend.createSettings({ ...DEFAULT_SETTINGS, tz, prefs: { seeded: true } });
+      this.settings = await this.backend.createSettings({ ...DEFAULT_SETTINGS, tz, prefs: { seeded: true, tutorial: 'pending' } });
     }
     this.persist();
     this.emit('setup');

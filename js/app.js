@@ -6,8 +6,10 @@ import { Store } from './store.js';
 import { clock, AVOID_CONFIRM_MINUTE, rankFor } from './logic.js';
 import * as V from './views.js';
 import * as fx from './fx.js';
-import { readDevicePrefs, writeDevicePrefs, applyDevicePrefs, buildBackdrop, lookTransition, LOOKS } from './themes.js';
+import { readDevicePrefs, writeDevicePrefs, applyDevicePrefs, buildBackdrop, lookTransition, lookId, LOOKS } from './themes.js';
 import { audio } from './audio.js';
+import { WORLD_IDS, words, heroState, patchHero, heroCelebrate, COMIC_WORDS } from './worlds.js';
+import { shouldShow as tutorialDue, openTutorial } from './tutorial.js';
 
 const params = new URLSearchParams(location.search);
 const DEMO = params.has('demo');
@@ -25,13 +27,16 @@ const sheetRoot = $('#sheet-root');
 const toastEl = $('#toast');
 const bk = $('#bk');
 
+let hadDevicePrefs = false;
+try { hadDevicePrefs = !!localStorage.getItem('1440:device'); } catch {}
 const device = readDevicePrefs();
-if (params.get('look')) device.look = params.get('look');
+if (params.get('look')) { device.look = params.get('look'); device.world = 'cyberpunk'; }
+if (WORLD_IDS.includes(params.get('world'))) device.world = params.get('world');
 applyDevicePrefs(device);
-buildBackdrop(bk, document.documentElement.dataset.look);
+buildBackdrop(bk, lookId(device));
 audio.sfxOn = !!device.sound;
 audio.musicOn = !!device.music;
-audio.look = document.documentElement.dataset.look;
+audio.look = lookId(device);
 writeDevicePrefs(device);
 // browsers only allow sound after a tap, so the first tap anywhere wakes the audio
 document.addEventListener('pointerdown', () => audio.unlock(), { capture: true });
@@ -150,15 +155,11 @@ function patchToday() {
   const c = ctx();
   patchHud(c);
   const s = V.dialState(c);
-  const segs = $('#segs');
-  if (!segs || Number(segs.dataset.total) !== s.total) { render(); return []; }
-  [...segs.children].forEach((el, i) => {
-    el.classList.toggle('on', i < s.done);
-    el.classList.toggle('part', i >= s.done && i < s.done + s.part);
-  });
+  const hero = $('#hero');
+  if (!hero || Number(hero.dataset.total) !== s.total) { render(); return []; }
+  patchHero(device.world, hero, heroState(c, s));
   $('#core-done').textContent = s.done;
   $('#core-total').textContent = s.total;
-  $('#dial')?.setAttribute('aria-label', `${1440 - c.now.minutes} minutes left today, ${s.done} of ${s.total} quests done`);
   const tpl = document.createElement('div');
   tpl.innerHTML = V.questsHtml(c);
   const inserted = morph($('#quests'), tpl);
@@ -173,13 +174,13 @@ function updateSyncLine() {
   el.replaceWith(tpl.firstElementChild);
 }
 
-// initial dial animation: segments light up one by one
+// opening animation: finished quests light up one by one on the hero
 function introDial() {
-  const segs = $('#segs');
-  if (!segs || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  [...segs.children].forEach((el, i) => {
-    if (!el.classList.contains('on')) return;
-    el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 260, delay: 120 + i * 55, easing: 'ease-out', fill: 'backwards' });
+  const hero = $('#hero');
+  if (!hero || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  hero.querySelectorAll('[data-slot].on').forEach((el, i) => {
+    const frames = el instanceof SVGElement ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 0, scale: '.3' }, { opacity: 1, scale: '1' }];
+    el.animate(frames, { duration: 320, delay: 140 + i * 70, easing: 'cubic-bezier(.2,.9,.3,1.3)', fill: 'backwards' });
   });
 }
 
@@ -229,9 +230,11 @@ function sectionDone(h, hist, day) {
 function reward(h, before, point) {
   const day = store.today();
   const after = store.history();
+  const W = words(device.world);
   if (point) {
     fx.burst(point.x, point.y);
     fx.floatText(point.x, point.y - 30, `+${h.xp} XP`);
+    if (device.world === 'comic') fx.word(point.x - 70, point.y - 20, COMIC_WORDS[Math.floor(Math.random() * COMIC_WORDS.length)]);
   }
   const t = performance.now();
   ui.combo = t - ui.lastTickAt < 4000 ? ui.combo + 1 : 1;
@@ -240,25 +243,26 @@ function reward(h, before, point) {
   else audio.play('tick');
   fx.haptic();
 
-  const segs = $('#segs');
   const done = after.perDay.get(day)?.done.length || 0;
-  const seg = segs?.children[done - 1];
-  seg?.animate([{ opacity: .15 }, { opacity: 1, offset: .25 }, { opacity: .4, offset: .5 }, { opacity: 1 }], { duration: 600, easing: 'ease-out' });
+  const hero = $('#hero');
+  const seg = hero?.querySelector(`[data-slot="${done - 1}"]`);
+  if (seg instanceof SVGElement) seg.animate([{ opacity: .15 }, { opacity: 1, offset: .25 }, { opacity: .4, offset: .5 }, { opacity: 1 }], { duration: 600, easing: 'ease-out' });
+  heroCelebrate(device.world, hero, done - 1);
 
   const wasPerfect = before.perDay.get(day)?.perfect, isPerfect = after.perDay.get(day)?.perfect;
   if (!(isPerfect && !wasPerfect) && sectionDone(h, after, day) && !sectionDone(h, before, day)) {
-    setTimeout(() => { fx.stamp(`${V.SECTION[h.section]} cleared`); audio.play('cleared'); }, 260);
+    setTimeout(() => { fx.stamp(W.cleared(V.SECTION[h.section])); audio.play('cleared'); }, 260);
   }
   if (isPerfect && !wasPerfect) {
     setTimeout(() => {
-      fx.moment({ kind: 'perfect', title: 'Perfect day', big: '+50', sub: 'Bonus XP', foot: `Perfect streak: ${after.perfect.current} day${after.perfect.current === 1 ? '' : 's'}` });
+      fx.moment({ kind: 'perfect', title: W.perfect, big: '+50', sub: 'Bonus XP', foot: `Perfect streak: ${after.perfect.current} day${after.perfect.current === 1 ? '' : 's'}` });
       audio.play('perfect'); fx.haptic(3);
     }, 700);
   }
   if (after.level.level > before.level.level) {
     const r = rankFor(after.level.level), newRank = r.name !== rankFor(before.level.level).name;
     setTimeout(() => {
-      fx.moment({ kind: 'level', title: 'Level up', big: String(after.level.level).padStart(2, '0'),
+      fx.moment({ kind: 'level', title: W.level, big: String(after.level.level).padStart(2, '0'),
         sub: newRank ? `New rank: ${r.name}` : r.name, foot: `${(after.level.next - after.level.xp).toLocaleString('en-IN')} XP to level ${after.level.level + 1}` });
       audio.play('level'); fx.haptic(3);
     }, 750);
@@ -395,13 +399,16 @@ const actions = {
       async () => { pauseTimer(); await backend.signOut(); store.clearLocal(); location.reload(); });
   },
   look(id) {
-    if (device.look === id || !LOOKS.some(l => l.id === id)) return;
-    device.look = id; writeDevicePrefs(device);
-    audio.play('switch'); fx.haptic(2);
-    audio.setLook(id);
-    lookTransition(() => { applyDevicePrefs(device); buildBackdrop(bk, id); render(); });
-    if (store.settings && !DEMO) store.updateSettings({ prefs: { ...(store.settings.prefs || {}), look: id } }).catch(() => {});
+    if ((device.look === id && device.world === 'cyberpunk') || !LOOKS.some(l => l.id === id)) return;
+    device.look = id; device.world = 'cyberpunk';
+    switchTo();
   },
+  world(id) {
+    if (device.world === id || !WORLD_IDS.includes(id)) return;
+    device.world = id;
+    switchTo();
+  },
+  tutorial() { startTutorial(); },
   toggle(which) {
     device[which] = !device[which]; writeDevicePrefs(device);
     if (which === 'sound') { audio.sfxOn = device.sound; if (device.sound) audio.play('tick'); }
@@ -529,7 +536,9 @@ setInterval(() => {
     lastMinute = now.minutes;
     const left = 1440 - now.minutes;
     const m = $('#dial-min'); if (m) { m.textContent = left; m.dataset.text = left; }
-    const d = $('#core-date'); if (d) d.textContent = V.dateText(now.day, now);
+    const d = $('#core-date'); if (d) d.textContent = V.dateText(now.day, now, device.world);
+    const hero = $('#hero');
+    if (hero && ui.tab === 'today') { const c = ctx(); patchHero(device.world, hero, heroState(c, V.dialState(c))); }
     const a = V.timeArc(now.minutes);
     const tr = $('#time-ring'); if (tr) { tr.setAttribute('stroke-dasharray', a.dash); tr.setAttribute('stroke-dashoffset', a.offset); }
     const dot = $('#time-dot'); if (dot) { dot.setAttribute('cx', a.x); dot.setAttribute('cy', a.y); }
@@ -566,12 +575,44 @@ async function startApp(user) {
   ui.booted = true;
   try { await store.start(user); }
   catch (err) { toast(ruleMessage(err) || err.message || 'Couldn\'t load your data.'); }
-  const serverLook = store.settings?.prefs?.look;
-  if (serverLook && !localStorage.getItem('1440:device') && serverLook !== device.look) {
-    device.look = serverLook; writeDevicePrefs(device); applyDevicePrefs(device); buildBackdrop(bk, serverLook); audio.setLook(serverLook);
+  const sp = store.settings?.prefs || {};
+  if (!hadDevicePrefs && (sp.world || sp.look)) {
+    if (WORLD_IDS.includes(sp.world)) device.world = sp.world;
+    if (LOOKS.some(l => l.id === sp.look)) device.look = sp.look;
+    writeDevicePrefs(device); applyDevicePrefs(device); buildBackdrop(bk, lookId(device)); audio.setLook(lookId(device));
   }
   render();
   if (ui.tab === 'today') introDial();
+  if (tutorialDue(store)) setTimeout(startTutorial, 350);
+}
+
+// ---------- switching worlds ----------
+function switchTo() {
+  writeDevicePrefs(device);
+  const id = lookId(device);
+  audio.play('switch'); fx.haptic(2);
+  audio.setLook(id);
+  lookTransition(() => { applyDevicePrefs(device); buildBackdrop(bk, id); render(); if (ui.tab === 'today') introDial(); });
+  if (store.settings && !DEMO) store.updateSettings({ prefs: { ...(store.settings.prefs || {}), world: device.world, look: device.look } }).catch(() => {});
+}
+
+// ---------- tutorial ----------
+let tut = null;
+function startTutorial() {
+  if (tut) return;
+  closeSheet();
+  tut = openTutorial({
+    store, device, audio, fx,
+    setWorld: (id) => actions.world(id),
+    addStarter: async (i) => guard(() => store.addHabit({ ...STARTERS[i] })),
+    onClose: () => {
+      tut = null;
+      if (ui.tab !== 'today') actions.tab('today'); else { render(); introDial(); }
+      const r = $('#hero')?.getBoundingClientRect();
+      if (r) setTimeout(() => fx.burst(r.left + r.width / 2, r.top + r.height / 2, { count: 30, spread: 1.8 }), 200);
+      audio.play('cleared');
+    },
+  });
 }
 async function boot() {
   const user = await backend.getUser().catch(() => null);

@@ -4,11 +4,25 @@ A personal daily quest tracker for iPhone, installed from Safari as a home-scree
 There are 1440 minutes in a day; anything not ticked by midnight counts as a miss, permanently.
 
 It plays like a game: XP, levels and ranks, combos, streak shields, cleared sections,
-perfect-day and level-up moments, and ten switchable looks (Redline, Overdrive, Neon,
-Terminal, Hologram, Vapor, Toxic, Arctic, Ronin, Chrome). Each look has its own music
-track and sound-effect voice, synthesized live with Web Audio (no audio files).
-All motion is GPU-only (transform and opacity), a tick patches only the rows that
-changed, and Calm mode freezes the background to save battery.
+and perfect-day and level-up moments. It comes in ten worlds, each with its own Today
+art, layout, words, particles, music and sounds:
+
+| World | Today screen |
+| --- | --- |
+| Cyberpunk | Neon HUD dial, with ten colour styles (Redline, Overdrive, Neon, Terminal, Hologram, Vapor, Toxic, Arctic, Ronin, Chrome) |
+| Bloom | A flower that opens a petal per quest |
+| Pixel Quest | A knight walking across the day past treasure chests |
+| Cozy Desk | Rainy window, pinned index card, sticky-note quests |
+| Deep Sea | A porthole that fills with water |
+| Orbit | Quests as moons around a planet |
+| Zen | A brush-stroke circle that paints itself in |
+| Comic | Pop-art panel, power meter, POW on every tick |
+| Notebook | Bullet-journal page with a hand-drawn tracker |
+| Pet | Mochi the chick, whose mood follows your day |
+
+New accounts get a short tutorial on first login (pick a world, add quests, try a tick).
+Music and sounds are synthesized live with Web Audio, with no audio files. All motion is
+transform/opacity, a tick patches only what changed, and Calm mode freezes the background.
 
 ## What's in here
 
@@ -19,8 +33,10 @@ changed, and Calm mode freezes the background to save battery.
 | `js/store.js` | Local-first data: ticks apply instantly and sync in the background |
 | `js/backend.js` | Supabase connection, plus a demo backend with fake history |
 | `js/views.js`, `js/app.js` | Screens and interactions |
-| `js/themes.js`, `js/fx.js` | The ten looks and their backdrops; particles, overlays, haptics |
-| `js/audio.js` | Sound effects and the ten procedural music tracks |
+| `js/worlds.js`, `worlds.css` | The ten worlds: Today art, words, backdrops, styles |
+| `js/themes.js`, `js/fx.js` | World and colour switching; particles, overlays, haptics |
+| `js/tutorial.js` | First-login tutorial |
+| `js/audio.js` | Sound effects and the procedural music tracks |
 | `fonts/` | Bundled fonts so every look works offline |
 | `config.js` | Supabase project URL and publishable key (public by design) |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Offline support and home-screen install |
@@ -56,7 +72,7 @@ where email = 'friend@example.com';
 
 ## Try it without logging in
 
-Open the site with `?demo` on the end for 45 days of fake history, or `?demo=new` to see what a brand-new account looks like. Add `&look=neon` (or any look) to jump to a theme.
+Open the site with `?demo` on the end for 45 days of fake history, or `?demo=new` to see what a brand-new account looks like. Add `&world=bloom` (or any world) or `&look=neon` (a Cyberpunk colour) to jump to it.
 
 ## Updating
 

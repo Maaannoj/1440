@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-look="redline" data-calm="0">
+<html lang="en" data-world="cyberpunk" data-look="redline" data-calm="0">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -21,12 +21,16 @@
     // apply the saved look before anything paints, so there's no flash of the wrong theme
     try {
       var p = JSON.parse(localStorage.getItem('1440:device') || '{}');
-      var q = new URLSearchParams(location.search).get('look');
-      if (q || p.look) document.documentElement.dataset.look = q || p.look;
-      if (p.calm) document.documentElement.dataset.calm = '1';
+      var u = new URLSearchParams(location.search);
+      var w = u.get('world') || (u.get('look') ? 'cyberpunk' : p.world) || 'cyberpunk';
+      var r = document.documentElement;
+      r.dataset.world = w;
+      r.dataset.look = w === 'cyberpunk' ? (u.get('look') || p.look || 'redline') : w;
+      if (p.calm) r.dataset.calm = '1';
     } catch (e) {}
   </script>
   <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./worlds.css">
 </head>
 <body>
   <div class="bk" id="bk" aria-hidden="true"></div>

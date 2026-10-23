@@ -2,8 +2,11 @@
 // Every animation here moves only transform and opacity (GPU-composited),
 // and every element removes itself when its animation ends.
 
+import { GLYPHS } from './worlds.js';
+
 const reduce = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 const look = () => document.documentElement.dataset.look || 'redline';
+const world = () => document.documentElement.dataset.world || 'cyberpunk';
 let layer = null;
 function fxLayer() {
   if (!layer) { layer = document.createElement('div'); layer.className = 'fx'; document.body.appendChild(layer); }
@@ -19,11 +22,13 @@ export function burst(x, y, { count = 20, spread = 1 } = {}) {
   if (reduce()) return;
   const L = fxLayer();
   const lk = look();
+  const glyphs = GLYPHS[world()];
   const frag = document.createDocumentFragment();
   for (let i = 0; i < count; i++) {
     const p = document.createElement('i');
     p.className = 'pt';
     if (lk === 'terminal') p.textContent = rnd() < .5 ? '1' : '0';
+    if (glyphs) { p.classList.add('pt-g'); p.textContent = glyphs[i % glyphs.length]; }
     if (i % 3 === 0) p.classList.add('pt-alt');
     p.style.left = x + 'px';
     p.style.top = y + 'px';
@@ -60,6 +65,23 @@ export function floatText(x, y, text, cls = '') {
     { transform: 'translate(-50%, -24px) scale(1)', opacity: 1, offset: .4 },
     { transform: 'translate(-50%, -64px) scale(.96)', opacity: 0 },
   ], { duration: reduce() ? 900 : 1150, easing: 'cubic-bezier(.2,.8,.3,1)', fill: 'forwards' }).onfinish = () => f.remove();
+}
+
+/** Comic-book sound word ("POW!") that slams in and fades. */
+export function word(x, y, text) {
+  if (reduce()) return;
+  const w = document.createElement('span');
+  w.className = 'fx-word';
+  w.textContent = text;
+  w.style.left = x + 'px'; w.style.top = y + 'px';
+  fxLayer().appendChild(w);
+  const rot = (rnd() - .5) * 24;
+  w.animate([
+    { transform: `translate(-50%,-50%) rotate(${rot}deg) scale(.2)`, opacity: 0 },
+    { transform: `translate(-50%,-50%) rotate(${rot}deg) scale(1.25)`, opacity: 1, offset: .15 },
+    { transform: `translate(-50%,-50%) rotate(${rot}deg) scale(1)`, opacity: 1, offset: .3 },
+    { transform: `translate(-50%,-70%) rotate(${rot}deg) scale(1)`, opacity: 0 },
+  ], { duration: 900, easing: 'cubic-bezier(.2,.9,.3,1.3)', fill: 'forwards' }).onfinish = () => w.remove();
 }
 
 export function pop(el, kind = 'spin') {

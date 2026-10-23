@@ -4,6 +4,7 @@ import { addDays, dow, habitRate, overallRate, progressOf, rankFor, RANKS, AVOID
 import { LOOKS } from './themes.js';
 import { TRACKS } from './audio.js';
 import { STARTERS } from './backend.js';
+import { WORLDS, BOX_SHAPE, words, heroHtml, heroState } from './worlds.js';
 
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const num = (n) => Number(n).toLocaleString('en-IN');
@@ -36,9 +37,13 @@ export function fmtClock(totalSeconds) {
   return (h ? h + ':' + pad2(m) : m) + ':' + pad2(r);
 }
 export function clockText(now) { return `${pad2(Math.floor(now.minutes / 60))}:${pad2(now.minutes % 60)}`; }
-export function dateText(day, now) {
-  const d = fmtDay(day, { weekday: 'short' }).toUpperCase();
-  return `${d} ${day.slice(8, 10)}.${day.slice(5, 7)} // ${clockText(now)}`;
+export function dateText(day, now, world = 'cyberpunk') {
+  if (world === 'cyberpunk') {
+    const d = fmtDay(day, { weekday: 'short' }).toUpperCase();
+    return `${d} ${day.slice(8, 10)}.${day.slice(5, 7)} // ${clockText(now)}`;
+  }
+  const h = Math.floor(now.minutes / 60), m = now.minutes % 60;
+  return `${fmtDay(day, { weekday: 'short', day: 'numeric', month: 'short' })} · ${((h + 11) % 12) + 1}:${pad2(m)} ${h >= 12 ? 'PM' : 'AM'}`;
 }
 function scheduleText(h) {
   const days = h.days?.length ? h.days : ALL_DAYS;
@@ -125,7 +130,7 @@ function segments(total, done = 0, part = 0) {
   const len = C / n - gap;
   let out = '';
   for (let i = 0; i < n; i++) {
-    out += `<circle class="seg${i < done ? ' on' : i < done + part ? ' part' : ''}" cx="${c}" cy="${c}" r="${rSeg}" stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-dashoffset="${(-(i * C / n) - gap / 2).toFixed(2)}" transform="rotate(-90 ${c} ${c})"/>`;
+    out += `<circle class="seg${i < done ? ' on' : i < done + part ? ' part' : ''}" data-slot="${i}" cx="${c}" cy="${c}" r="${rSeg}" stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-dashoffset="${(-(i * C / n) - gap / 2).toFixed(2)}" transform="rotate(-90 ${c} ${c})"/>`;
   }
   return out;
 }
@@ -134,7 +139,7 @@ function dial(ctx, s) {
   const t = timeArc(ctx.now.minutes);
   const left = 1440 - ctx.now.minutes;
   return `
-  <div class="dial" id="dial" role="img" aria-label="${left} minutes left today, ${s.done} of ${s.total} quests done">
+  <div class="dial hero hero-cyberpunk" id="hero" data-total="${s.total}" role="img" aria-label="${left} minutes left today, ${s.done} of ${s.total} quests done">
     <div class="dial-l dial-ticks"></div>
     <div class="dial-l dial-dash"></div>
     <div class="dial-l dial-sweep"></div>
@@ -145,7 +150,7 @@ function dial(ctx, s) {
         <linearGradient id="g-vapor" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF71CE"/><stop offset=".5" stop-color="#B967FF"/><stop offset="1" stop-color="#01CDFE"/></linearGradient>
         <linearGradient id="g-chrome" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset=".48" stop-color="#9AA5B3"/><stop offset=".52" stop-color="#E9EEF3"/><stop offset="1" stop-color="#7D8896"/></linearGradient>
       </defs>
-      <g class="segs" id="segs" data-total="${s.total}">${segments(s.total, s.done, s.part)}</g>
+      <g class="segs" id="segs">${segments(s.total, s.done, s.part)}</g>
       <circle class="time-track" cx="${c}" cy="${c}" r="${rTime}"/>
       <circle class="time-ring" id="time-ring" cx="${c}" cy="${c}" r="${rTime}" stroke-dasharray="${t.dash}" stroke-dashoffset="${t.offset}" transform="rotate(-90 ${c} ${c})"/>
       <circle class="time-dot" id="time-dot" cx="${t.x}" cy="${t.y}" r="4"/>
@@ -156,16 +161,27 @@ function dial(ctx, s) {
 }
 
 // ---------- quests (Today) ----------
-function boxSvg(h, e, locked) {
+const STAR = (() => { const p = []; for (let i = 0; i < 16; i++) { const r = i % 2 ? 9 : 16.5, a = Math.PI * i / 8 - Math.PI / 2; p.push(`${(17 + r * Math.cos(a)).toFixed(1)},${(17 + r * Math.sin(a)).toFixed(1)}`); } return p.join(' '); })();
+const SHAPES = {
+  square: (c) => `<rect class="${c}" x="1" y="1" width="32" height="32"/>`,
+  circle: (c) => `<circle class="${c}" cx="17" cy="17" r="15.5"/>`,
+  pixel:  (c) => `<path class="${c}" d="M5 1H29V3H31V5H33V29H31V31H29V33H5V31H3V29H1V5H3V3H5Z"/>`,
+  hand:   (c) => `<path class="${c}" d="M2.6 3.2 L31.2 1.6 L32.3 31.6 L1.7 32.5 Z"/>`,
+  star:   (c) => `<polygon class="${c}" points="${STAR}"/>`,
+  heart:  (c) => `<path class="${c}" d="M17 31 C6 23 .8 16 3.2 9.4 C5.6 3 13.4 2.6 17 8.6 C20.6 2.6 28.4 3 30.8 9.4 C33.2 16 28 23 17 31 Z"/>`,
+};
+function boxSvg(h, e, locked, shape = 'square') {
+  const draw = SHAPES[shape] || SHAPES.square;
   const done = !!e?.done;
   if (done) {
-    return `<svg viewBox="0 0 34 34" aria-hidden="true"><rect class="fill" x="1" y="1" width="32" height="32"/><path class="chk" d="M9 17.5l5.5 5.5L25.5 11"/></svg>`;
+    const chk = shape === 'heart' ? '' : `<path class="chk" d="${shape === 'pixel' ? 'M9 17h3v3h3v3h3v-3h3v-3h3v-3h3v-3' : 'M9 17.5l5.5 5.5L25.5 11'}"/>`;
+    return `<svg viewBox="0 0 34 34" aria-hidden="true">${draw('fill')}${chk}</svg>`;
   }
   const glyph = h.kind === 'timer' ? '<path class="glyph" d="M13 10.5v13l10.5-6.5z"/>'
     : h.kind === 'people' ? '<path class="glyph-line" d="M17 11v12M11 17h12"/>'
     : h.kind === 'count' && (e?.value || 0) > 0 ? `<text x="17" y="21.5" text-anchor="middle" class="glyph" style="font:700 13px var(--f-mono),monospace">${e.value}</text>`
     : locked ? '<path class="glyph-line" d="M12.5 16v-2.5a4.5 4.5 0 0 1 9 0V16M11 16h12v8H11z"/>' : '';
-  return `<svg viewBox="0 0 34 34" aria-hidden="true"><rect class="frame" x="1" y="1" width="32" height="32"/>${glyph}</svg>`;
+  return `<svg viewBox="0 0 34 34" aria-hidden="true">${draw('frame')}${glyph}</svg>`;
 }
 function questSub(h, e, stat, ctx) {
   const parts = [`<span class="q-xp">+${h.xp} XP</span>`];
@@ -191,7 +207,7 @@ export function questRow(h, ctx, i) {
   return `<button class="${cls}" data-key="${h.id}" data-act="tick:${h.id}" style="--i:${i}" aria-label="${esc(h.name)}${done ? ', done' : ''}">
     <span class="q-emo"><em class="emo" aria-hidden="true">${esc(h.emoji || '◆')}</em></span>
     <span class="q-txt"><span class="q-name">${esc(h.name)}</span><span class="q-sub">${questSub(h, e, stat, ctx)}</span></span>
-    <span class="q-box">${boxSvg(h, e, locked)}</span>
+    <span class="q-box">${boxSvg(h, e, locked, BOX_SHAPE[ctx.device.world])}</span>
   </button>`;
 }
 export function questsHtml(ctx) {
@@ -205,12 +221,12 @@ export function questsHtml(ctx) {
     const start = i; i += list.length;
     if (d === list.length && !ctx.ui.expanded.has(sec)) {
       return `<section class="sec" data-key="clr-${sec}" aria-label="${SECTION[sec]} cleared">
-        <button class="cleared" data-act="expand:${sec}">${SECTION[sec]} <b>${d}/${list.length}</b> cleared
+        <button class="cleared" data-act="expand:${sec}"><span class="cl-t">${words(ctx.device.world).cleared(SECTION[sec])}</span> <b>${d}/${list.length}</b>
           <span class="cl-emos" aria-hidden="true">${list.slice(0, 5).map((h, k) => `<em class="emo" style="--i:${k}">${esc(h.emoji || '◆')}</em>`).join('')}</span></button>
       </section>`;
     }
     return `<section class="sec" data-key="sec-${sec}" data-deep aria-label="${SECTION[sec]}">
-      <h2 class="sec-head" data-key="head-${sec}"><span>${sec === 'day' ? 'Day quests' : SECTION[sec]}</span><span class="sec-n">${d}/${list.length}</span></h2>
+      <h2 class="sec-head" data-key="head-${sec}"><span>${sec === 'day' && ctx.device.world === 'cyberpunk' ? 'Day quests' : SECTION[sec]}</span><span class="sec-n">${d}/${list.length}</span></h2>
       ${list.map((h, k) => questRow(h, ctx, start + k)).join('')}
     </section>`;
   }).join('') || (ctx.store.activeHabits().length
@@ -248,15 +264,17 @@ function welcome(ctx) {
 // ---------- Today ----------
 export function today(ctx) {
   const s = dialState(ctx);
+  const world = ctx.device.world;
+  const hero = world === 'cyberpunk' ? dial(ctx, s) : heroHtml(world, ctx, heroState(ctx, s));
   return `
   ${hud(ctx)}
   <section class="core">
     <div class="core-top">
-      <p class="core-date" id="core-date">${dateText(ctx.now.day, ctx.now)}</p>
+      <p class="core-date" id="core-date">${dateText(ctx.now.day, ctx.now, world)}</p>
       <button class="music-btn" data-act="toggle:music" aria-pressed="${!!ctx.device.music}" aria-label="Music"><i></i><i></i><i></i><i></i></button>
     </div>
-    ${dial(ctx, s)}
-    <div class="core-row"><span class="core-q">Quests <b id="core-done">${s.done}</b>/<span id="core-total">${s.total}</span></span><span class="combo" id="combo" aria-live="polite"></span></div>
+    ${hero}
+    <div class="core-row"><span class="core-q">${words(world).quests} <b id="core-done">${s.done}</b>/<span id="core-total">${s.total}</span></span><span class="combo" id="combo" aria-live="polite"></span></div>
   </section>
   <div class="quests" id="quests">${questsHtml(ctx)}</div>
   ${(() => { const n = ctx.store.activeHabits().length; return n > 0 && n < 4 ? startersBlock(ctx, { title: 'Add more quests', text: 'Most people start with 3 to 6. Tap to add.' }) : ''; })()}
@@ -524,6 +542,16 @@ export function peopleSheet(ctx, id) {
   </form>`;
 }
 
+// ---------- world cards (Me and the tutorial) ----------
+export function worldCards(current, act = 'world') {
+  return `<div class="worlds">${WORLDS.map(w => `
+    <button class="wcard${current === w.id ? ' is-on' : ''}" data-world="${w.id}"${w.id === 'cyberpunk' ? ' data-look="redline"' : ''} data-act="${act}:${w.id}" aria-pressed="${current === w.id}">
+      <span class="wc-art" aria-hidden="true"><em class="emo">${w.icon}</em></span>
+      <span class="wc-name">${w.name}</span><span class="wc-line">${w.line}</span>
+      ${current === w.id ? '<span class="wc-on">On</span>' : ''}
+    </button>`).join('')}</div>`;
+}
+
 // ---------- Me ----------
 export function me(ctx) {
   const { history, store, ui, device } = ctx;
@@ -553,14 +581,17 @@ export function me(ctx) {
       : '<p class="hint">Shields are off. Every miss breaks the streak.</p>'}
   </section>
 
-  <section class="block"><h2 class="block-title">Theme</h2>
+  <section class="block"><h2 class="block-title">World</h2>
+    ${worldCards(device.world)}
+  </section>
+  ${device.world === 'cyberpunk' ? `<section class="block"><h2 class="block-title">Cyberpunk colours</h2>
     <div class="looks">${LOOKS.map(l => `
       <button class="look-card${device.look === l.id ? ' is-on' : ''}" data-look="${l.id}" data-act="look:${l.id}" aria-pressed="${device.look === l.id}">
         <span class="lc-prev" aria-hidden="true"><i class="lc-ring"></i><i class="lc-bar b1"><i></i></i><i class="lc-bar b2"><i></i></i><i class="lc-bar b3"><i></i></i></span>
         <span class="lc-name">${l.name}</span><span class="lc-line">${l.line}</span>
         ${device.look === l.id ? '<span class="lc-on">On</span>' : ''}
       </button>`).join('')}</div>
-  </section>
+  </section>` : ''}
 
   <section class="block"><h2 class="block-title">Effects</h2>
     <div class="switch-row"><div><b>Sound effects</b><span>Ticks, combos, cleared sections and level-ups, in your theme's sound.</span></div>
@@ -581,6 +612,7 @@ export function me(ctx) {
   <section class="block"><h2 class="block-title">Account</h2>
     <p class="block-text">${esc(store.user?.email || '')}</p>
     <div class="sheet-actions">
+      <button class="btn btn-quiet" data-act="tutorial">Replay the tutorial</button>
       <button class="btn btn-quiet" data-act="password">Change password</button>
       <button class="btn btn-quiet btn-danger" data-act="logout">Log out</button>
     </div>

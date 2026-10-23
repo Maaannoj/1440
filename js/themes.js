@@ -1,5 +1,7 @@
-// 1440 · themes ("looks"). Colours and fonts live in styles.css under [data-look];
-// this file names them, builds each look's animated backdrop, and stores the choice.
+// 1440 · themes. A *world* (worlds.js) is the whole game; Cyberpunk also has ten colour
+// *looks*. The root element carries both: data-world="bloom" and data-look="bloom",
+// or data-world="cyberpunk" and data-look="neon". Music, backdrop and styles key off data-look.
+import { WORLD_IDS, worldBackdrop, injectWorldCss } from './worlds.js';
 
 export const LOOKS = [
   { id: 'redline',   name: 'Redline',   line: 'Black and red. Sharp edges, heartbeat glow.' },
@@ -16,7 +18,7 @@ export const LOOKS = [
 export const DEFAULT_LOOK = 'redline';
 
 const KEY = '1440:device';
-const DEFAULTS = { v: 2, look: DEFAULT_LOOK, sound: true, music: false, calm: false };
+const DEFAULTS = { v: 2, world: 'cyberpunk', look: DEFAULT_LOOK, sound: true, music: false, calm: false };
 export function readDevicePrefs() {
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) || '{}');
@@ -26,9 +28,17 @@ export function readDevicePrefs() {
 }
 export function writeDevicePrefs(p) { try { localStorage.setItem(KEY, JSON.stringify(p)); } catch {} }
 
+/** The id that styles, backdrop and music key off. */
+export function lookId(p) {
+  const world = WORLD_IDS.includes(p.world) ? p.world : 'cyberpunk';
+  if (world !== 'cyberpunk') return world;
+  return LOOKS.some(l => l.id === p.look) ? p.look : DEFAULT_LOOK;
+}
 export function applyDevicePrefs(p) {
   const root = document.documentElement;
-  root.dataset.look = LOOKS.some(l => l.id === p.look) ? p.look : DEFAULT_LOOK;
+  injectWorldCss();
+  root.dataset.world = WORLD_IDS.includes(p.world) ? p.world : 'cyberpunk';
+  root.dataset.look = lookId(p);
   root.dataset.calm = p.calm ? '1' : '0';
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.content = getComputedStyle(root).getPropertyValue('--bg').trim() || '#000000';
@@ -39,6 +49,7 @@ export function applyDevicePrefs(p) {
 export function buildBackdrop(el, look) {
   if (el.dataset.built === look) return;
   el.dataset.built = look;
+  if (WORLD_IDS.includes(look)) { el.innerHTML = worldBackdrop(look); return; }
   if (look === 'redline') {
     el.innerHTML = `
       <div class="bk-glow"></div>
