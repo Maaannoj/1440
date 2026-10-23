@@ -1,8 +1,12 @@
-// 1440 · app controller: boot, navigation, actions, timers.
+// 1440 · app controller: boot, navigation, ticking, rewards, timers.
+// Smoothness rules: the screen is rebuilt only on tab changes; a tick patches just
+// the rows and numbers that changed, so looping animations never restart.
 import { SupabaseBackend, DemoBackend, ruleMessage, isNetworkError } from './backend.js';
 import { Store } from './store.js';
-import { clock, AVOID_CONFIRM_MINUTE } from './logic.js';
+import { clock, AVOID_CONFIRM_MINUTE, rankFor } from './logic.js';
 import * as V from './views.js';
+import * as fx from './fx.js';
+import { readDevicePrefs, writeDevicePrefs, applyDevicePrefs, buildBackdrop, lookTransition, LOOKS } from './themes.js';
 
 const params = new URLSearchParams(location.search);
 const DEMO = params.has('demo');
@@ -11,138 +15,193 @@ if (params.get('now')) clock.setNow(params.get('now'));
 const cfg = window.APP_CONFIG || {};
 const backend = DEMO ? new DemoBackend() : new SupabaseBackend(cfg.supabaseUrl, cfg.supabaseKey);
 const store = new Store(backend, { cachePrefix: DEMO ? '1440demo' : '1440' });
-window.__1440 = { store, backend, clock }; // handy for debugging
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const main = $('#main');
 const tabbarEl = $('#tabbar');
 const sheetRoot = $('#sheet-root');
 const toastEl = $('#toast');
+const bk = $('#bk');
+
+const device = readDevicePrefs();
+if (params.get('look')) device.look = params.get('look');
+applyDevicePrefs(device);
+buildBackdrop(bk, document.documentElement.dataset.look);
+fx.sound.on = !!device.sound;
 
 const ui = {
   demo: DEMO,
-  tab: (location.hash.slice(1) || 'today'),
-  calMonth: null,
-  reorder: false,
-  showArchived: false,
-  sheet: null,        // { type, id }
-  flash: null,
-  lastLevel: null,
-  lastPerfect: null,
-  booted: false,
+  tab: ['today', 'log', 'quests', 'me'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'today',
+  calMonth: null, reorder: false, showArchived: false,
+  expanded: new Set(), sheet: null, confirm: null, booted: false,
+  combo: 0, lastTickAt: -1e9, shownLevel: null,
 };
-if (!['today', 'calendar', 'habits', 'me'].includes(ui.tab)) ui.tab = 'today';
+window.__1440 = { store, backend, clock, ui, fx }; // for debugging
 
-// ---------- haptics (iOS 18+: toggling a switch input gives a tap) ----------
-const hapticLabel = $('#haptic');
-function haptic() { try { hapticLabel.click(); } catch { /* not supported */ } }
-
-// ---------- timer (persists across app restarts) ----------
+// ---------- timer (survives app restarts) ----------
 const timerKey = () => `${DEMO ? '1440demo' : '1440'}:timer:${store.user?.id}`;
 function getTimer() { try { return JSON.parse(localStorage.getItem(timerKey()) || 'null'); } catch { return null; } }
 function setTimer(t) { try { t ? localStorage.setItem(timerKey(), JSON.stringify(t)) : localStorage.removeItem(timerKey()); } catch {} }
 function timerSeconds(t = getTimer()) { return t ? t.base * 60 + (clock.now() - t.startedAt) / 1000 : 0; }
-
 function startTimer(id) {
   const day = store.today();
-  const e = store.entry(id, day);
-  const t = getTimer();
-  if (t && t.habit_id !== id) pauseTimer(); // only one timer at a time
-  setTimer({ habit_id: id, day, startedAt: clock.now(), base: e?.value || 0 });
-  haptic();
+  if (getTimer()?.habit_id && getTimer().habit_id !== id) pauseTimer();
+  setTimer({ habit_id: id, day, startedAt: clock.now(), base: store.entry(id, day)?.value || 0 });
 }
-function pauseTimer() {
-  const t = getTimer();
-  if (!t) return;
-  saveTimerProgress(t);
-  setTimer(null);
-}
+function pauseTimer() { const t = getTimer(); if (!t) return; saveTimerProgress(t); setTimer(null); }
 function saveTimerProgress(t) {
   const h = store.habit(t.habit_id);
   if (!h) { setTimer(null); return; }
   const mins = Math.min(h.target, Math.floor(timerSeconds(t) / 60));
   const e = store.entry(t.habit_id, t.day);
-  if (mins > (e?.value || 0)) {
-    const before = store.history();
-    if (mins >= h.target) setTimer(null);   // stop first so the screen never shows a finished timer running
-    const prev = store.setEntry(t.habit_id, t.day, mins, e?.meta);
-    if (mins >= h.target) {
-      haptic();
-      toast(doneMessage(h, before), undoFor(t.habit_id, t.day, prev));
-      if (ui.sheet?.type === 'timer') refreshSheet();
-    }
+  if (mins <= (e?.value || 0)) return;
+  if (t.day !== store.today()) { setTimer(null); return; }
+  const before = store.history();
+  if (mins >= h.target) setTimer(null);
+  const prev = store.setEntry(t.habit_id, t.day, mins, e?.meta);
+  if (mins >= h.target) {
+    const arc = $('#timer-arc')?.closest('.timer')?.getBoundingClientRect();
+    reward(h, before, arc ? { x: arc.left + arc.width / 2, y: arc.top + arc.height / 2 } : null);
+    toast(`${h.name} done`, undoFor(h.id, t.day, prev));
+    if (ui.sheet?.type === 'timer') refreshSheet();
   }
 }
 
-// ---------- context for views ----------
+// ---------- context ----------
 function ctx() {
   const now = store.now();
   const t = getTimer();
   return {
-    store, ui, now,
+    store, ui, now, device,
     history: store.history(),
     entry: (id) => store.entry(id, now.day),
     timer: t && t.day === now.day ? t : null,
     timerSeconds: timerSeconds(t),
     shieldsOn: !!store.settings?.shields_enabled,
-    flash: ui.flash,
   };
 }
 
 // ---------- rendering ----------
+const VIEW = { today: V.today, log: V.log, quests: V.quests, me: V.me };
 function render() {
   if (!store.user) return;
   if (!store.settings && !store.habits.length) { main.innerHTML = V.needsConnection(); tabbarEl.hidden = true; return; }
   tabbarEl.hidden = false;
   const c = ctx();
-  main.innerHTML = V[ui.tab](c);
-  tabbarEl.innerHTML = V.tabbar(ui.tab);
-  document.title = ui.tab === 'today' ? '1440' : `${ui.tab[0].toUpperCase() + ui.tab.slice(1)} – 1440`;
-  animateDial();
-  ui.flash = null;
+  main.innerHTML = VIEW[ui.tab](c);
+  ui.shownLevel = c.history.level.level;
+  updateTabbar();
+  document.title = ui.tab === 'today' ? '1440' : `${ui.tab[0].toUpperCase() + ui.tab.slice(1)} · 1440`;
+}
+function updateTabbar() {
+  if (!tabbarEl.firstElementChild) tabbarEl.innerHTML = V.tabbar(ui.tab);
+  const i = V.TABS.findIndex(t => t[0] === ui.tab);
+  $('#tab-ind').style.transform = `translateX(${i * 100}%)`;
+  tabbarEl.querySelectorAll('.tab').forEach((b, k) => {
+    b.classList.toggle('is-active', k === i);
+    if (k === i) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+  });
 }
 
-let lastDone = null;
-function animateDial() {
-  const el = $('#dial-done');
-  if (!el) return;
-  const len = parseFloat(el.dataset.len), C = el.dataset.c;
-  if (lastDone === 0 && len > 0) el.removeAttribute('opacity');
-  if (lastDone != null && lastDone !== len && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    el.animate([{ strokeDasharray: `${lastDone} ${C}` }, { strokeDasharray: `${len} ${C}` }],
-      { duration: 520, easing: 'cubic-bezier(.2,.8,.2,1)' });
+/** Replace only the keyed children that changed; keep the rest (and their running animations). */
+function morph(oldP, newP) {
+  const oldKids = [...oldP.children], newKids = [...newP.children];
+  if (oldKids.length !== newKids.length) { oldP.replaceChildren(...newKids); return newKids; }
+  const inserted = [];
+  newKids.forEach((n, i) => {
+    const o = oldKids[i];
+    if (o.isEqualNode(n)) return;
+    if (n.hasAttribute('data-deep') && o.tagName === n.tagName && o.dataset.key === n.dataset.key) {
+      for (const a of [...o.attributes]) if (!n.hasAttribute(a.name)) o.removeAttribute(a.name);
+      for (const a of [...n.attributes]) if (o.getAttribute(a.name) !== a.value) o.setAttribute(a.name, a.value);
+      inserted.push(...morph(o, n));
+    } else { o.replaceWith(n); inserted.push(n); }
+  });
+  return inserted;
+}
+
+function patchHud(c) {
+  const d = V.hudData(c);
+  const set = (id, v) => { const el = document.getElementById(id); if (el && el.textContent !== String(v)) el.textContent = v; };
+  set('hud-lv', String(d.level).padStart(2, '0'));
+  set('hud-rank', d.rank); set('hud-lvl', 'LVL ' + d.level);
+  set('hud-xp', d.xp.toLocaleString('en-IN')); set('hud-next', d.next.toLocaleString('en-IN'));
+  set('hud-streak', d.streak); set('hud-shields', d.shields);
+  const fill = document.getElementById('hud-xpfill');
+  if (fill) {
+    if (ui.shownLevel != null && d.level > ui.shownLevel) {
+      fill.style.transform = 'scaleX(1)';
+      setTimeout(() => { fill.style.transition = 'none'; fill.style.transform = 'scaleX(0)'; fill.getBoundingClientRect();
+        fill.style.transition = ''; fill.style.transform = `scaleX(${d.pct.toFixed(4)})`; }, 900);
+    } else fill.style.transform = `scaleX(${d.pct.toFixed(4)})`;
   }
-  lastDone = len;
+  ui.shownLevel = d.level;
 }
 
-function openSheet(type, id) {
-  ui.sheet = { type, id };
+function patchToday() {
+  if (ui.tab !== 'today' || !$('#quests')) { render(); return []; }
+  const c = ctx();
+  patchHud(c);
+  const s = V.dialState(c);
+  const segs = $('#segs');
+  if (!segs || Number(segs.dataset.total) !== s.total) { render(); return []; }
+  [...segs.children].forEach((el, i) => {
+    el.classList.toggle('on', i < s.done);
+    el.classList.toggle('part', i >= s.done && i < s.done + s.part);
+  });
+  $('#core-done').textContent = s.done;
+  $('#core-total').textContent = s.total;
+  $('#dial')?.setAttribute('aria-label', `${1440 - c.now.minutes} minutes left today, ${s.done} of ${s.total} quests done`);
+  const tpl = document.createElement('div');
+  tpl.innerHTML = V.questsHtml(c);
+  const inserted = morph($('#quests'), tpl);
+  updateSyncLine();
+  return inserted;
+}
+function updateSyncLine() {
+  const el = $('#sync-line');
+  if (!el) return;
+  const tpl = document.createElement('div');
+  tpl.innerHTML = V.syncLine(ctx());
+  el.replaceWith(tpl.firstElementChild);
+}
+
+// initial dial animation: segments light up one by one
+function introDial() {
+  const segs = $('#segs');
+  if (!segs || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  [...segs.children].forEach((el, i) => {
+    if (!el.classList.contains('on')) return;
+    el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 260, delay: 120 + i * 55, easing: 'ease-out', fill: 'backwards' });
+  });
+}
+
+// ---------- sheets ----------
+function openSheet(type, arg) {
+  ui.sheet = { type, arg };
   const c = ctx();
   const html = {
-    day: () => V.daySheet(c, id),
-    habit: () => V.habitSheet(c, id),
-    form: () => V.habitForm(c, id),
-    timer: () => V.timerSheet(c, id),
-    people: () => V.peopleSheet(c, id),
-    password: () => V.passwordSheet(),
+    day: () => V.daySheet(c, arg), habit: () => V.habitSheet(c, arg), form: () => V.habitForm(c, arg),
+    timer: () => V.timerSheet(c, arg), people: () => V.peopleSheet(c, arg), password: () => V.passwordSheet(),
+    confirm: () => V.confirmSheet({ ...arg, act: 'confirm-yes' }),
   }[type]();
   const wasOpen = sheetRoot.classList.contains('is-open');
   if (!wasOpen) toastEl.classList.remove('is-on');
   sheetRoot.innerHTML = `<div class="sheet-backdrop" data-act="sheet-close"></div>
     <div class="sheet" role="dialog" aria-modal="true" aria-label="${type}"><div class="sheet-grip" aria-hidden="true"></div>${html}</div>`;
-  if (!wasOpen) requestAnimationFrame(() => sheetRoot.classList.add('is-open'));
-  else sheetRoot.classList.add('is-open');
+  if (!wasOpen) { sheetRoot.getBoundingClientRect(); sheetRoot.classList.add('is-open'); }
   document.body.classList.add('has-sheet');
   const kind = sheetRoot.querySelector('input[name="kind"]:checked');
   if (kind) syncKindFields(kind.form);
 }
-function refreshSheet() { if (ui.sheet) openSheet(ui.sheet.type, ui.sheet.id); }
+function refreshSheet() { if (ui.sheet) openSheet(ui.sheet.type, ui.sheet.arg); }
 function closeSheet() {
-  ui.sheet = null;
+  ui.sheet = null; ui.confirm = null;
   sheetRoot.classList.remove('is-open');
   document.body.classList.remove('has-sheet');
-  setTimeout(() => { if (!ui.sheet) sheetRoot.innerHTML = ''; }, 260);
+  setTimeout(() => { if (!ui.sheet) sheetRoot.innerHTML = ''; }, 340);
 }
+function ask(opts, run) { ui.confirm = run; openSheet('confirm', opts); }
 
 let toastTimer = null;
 function toast(text, action) {
@@ -150,23 +209,60 @@ function toast(text, action) {
   toastEl.innerHTML = `<span>${V.esc(text)}</span>${action ? `<button data-act="toast-action">${V.esc(action.label)}</button>` : ''}`;
   toastEl._action = action?.run || null;
   toastEl.classList.add('is-on');
-  toastTimer = setTimeout(() => toastEl.classList.remove('is-on'), action ? 5000 : 2800);
+  toastTimer = setTimeout(() => toastEl.classList.remove('is-on'), action ? 4500 : 2600);
 }
+function undoFor(id, day, prev) { return { label: 'Undo', run: () => { store.setEntry(id, day, prev.value, prev.meta); fx.sound.play('untick'); } }; }
 
-// ---------- celebrating ----------
-/** The best thing to say after a habit is completed. */
-function doneMessage(h, before) {
-  const after = store.history();
-  const day = store.today();
-  if (after.perDay.get(day)?.perfect && !before.perDay.get(day)?.perfect) return 'Perfect day. +50 XP';
-  if (after.level.level > before.level.level) return `Level ${after.level.level} reached`;
-  return `${h.name} done, +${h.xp} XP`;
+// ---------- rewards ----------
+function sectionDone(h, hist, day) {
+  const x = hist.perDay.get(day);
+  const ids = store.habitsForDay(day).filter(k => k.section === h.section).map(k => k.id);
+  return ids.length > 0 && ids.every(id => x?.done.includes(id));
 }
-function undoFor(id, day, prev) {
-  return { label: 'Undo', run: () => store.setEntry(id, day, prev.value, prev.meta) };
+function reward(h, before, point) {
+  const day = store.today();
+  const after = store.history();
+  if (point) {
+    fx.burst(point.x, point.y);
+    fx.floatText(point.x, point.y - 30, `+${h.xp} XP`);
+  }
+  const t = performance.now();
+  ui.combo = t - ui.lastTickAt < 4000 ? ui.combo + 1 : 1;
+  ui.lastTickAt = t;
+  if (ui.combo >= 2) { fx.badge($('#combo'), `Combo ×${ui.combo}`); fx.sound.play('combo', ui.combo); }
+  else fx.sound.play('tick');
+  fx.haptic();
+
+  const segs = $('#segs');
+  const done = after.perDay.get(day)?.done.length || 0;
+  const seg = segs?.children[done - 1];
+  seg?.animate([{ opacity: .15 }, { opacity: 1, offset: .25 }, { opacity: .4, offset: .5 }, { opacity: 1 }], { duration: 600, easing: 'ease-out' });
+
+  const wasPerfect = before.perDay.get(day)?.perfect, isPerfect = after.perDay.get(day)?.perfect;
+  if (!(isPerfect && !wasPerfect) && sectionDone(h, after, day) && !sectionDone(h, before, day)) {
+    setTimeout(() => { fx.stamp(`${V.SECTION[h.section]} cleared`); fx.sound.play('cleared'); }, 260);
+  }
+  if (isPerfect && !wasPerfect) {
+    setTimeout(() => {
+      fx.moment({ kind: 'perfect', title: 'Perfect day', big: '+50', sub: 'Bonus XP', foot: `Perfect streak: ${after.perfect.current} day${after.perfect.current === 1 ? '' : 's'}` });
+      fx.sound.play('perfect'); fx.haptic(3);
+    }, 700);
+  }
+  if (after.level.level > before.level.level) {
+    const r = rankFor(after.level.level), newRank = r.name !== rankFor(before.level.level).name;
+    setTimeout(() => {
+      fx.moment({ kind: 'level', title: 'Level up', big: String(after.level.level).padStart(2, '0'),
+        sub: newRank ? `New rank: ${r.name}` : r.name, foot: `${(after.level.next - after.level.xp).toLocaleString('en-IN')} XP to level ${after.level.level + 1}` });
+      fx.sound.play('level'); fx.haptic(3);
+    }, 750);
+  }
 }
 
 // ---------- ticking ----------
+function rowPoint(id) {
+  const box = $(`.q[data-key="${id}"] .q-box`)?.getBoundingClientRect();
+  return box ? { x: box.left + box.width / 2, y: box.top + box.height / 2 } : null;
+}
 function tickHabit(id) {
   const h = store.habit(id);
   const now = store.now();
@@ -176,18 +272,40 @@ function tickHabit(id) {
   if (h.kind === 'timer') return openSheet('timer', id);
   if (h.kind === 'people') return openSheet('people', id);
   if (h.kind === 'avoid' && !e?.done && now.minutes < AVOID_CONFIRM_MINUTE) {
+    fx.pop($(`.q[data-key="${id}"]`), 'shake'); fx.sound.play('deny');
     toast('You can confirm a clean day after 8 PM.');
     return;
   }
   const next = h.kind === 'count' ? (v >= h.target ? 0 : v + 1) : (e?.done ? 0 : 1);
   const nowDone = next >= h.target;
+  const point = rowPoint(id);
   const before = store.history();
-  ui.flash = nowDone ? id : null;
-  const prev = store.setEntry(id, day, next, e?.meta);
-  haptic();
-  const msg = nowDone ? doneMessage(h, before)
-    : next === 0 ? `${h.name} unticked` : `${h.name}: ${next} of ${h.target}`;
-  toast(msg, undoFor(id, day, prev));
+  // keep a finishing section open for a moment, then fold it into a "cleared" bar
+  const sec = h.section;
+  const wasExpanded = ui.expanded.has(sec);
+  if (nowDone && !wasExpanded) ui.expanded.add(sec);
+  const prev = store.setEntry(id, day, next, e?.meta);   // patches the screen synchronously
+  if (nowDone) {
+    const row = $(`.q[data-key="${id}"]`);
+    fx.flash(row);
+    fx.pop(row?.querySelector('.q-emo .emo'));
+    reward(h, before, point);
+    toast(`${h.name} done`, undoFor(id, day, prev));
+    if (!wasExpanded) setTimeout(() => {
+      ui.expanded.delete(sec);
+      if (ui.tab !== 'today') return;
+      for (const el of patchToday()) {
+        if (el.dataset.key === 'clr-' + sec) el.animate([{ opacity: 0, transform: 'scale(.94)' }, { opacity: 1, transform: 'none' }], { duration: 360, easing: 'cubic-bezier(.2,.9,.3,1.2)' });
+      }
+    }, 1300);
+  } else if (next > 0) {
+    fx.sound.play('step', next); fx.haptic();
+    if (point) fx.floatText(point.x, point.y - 26, `${next}/${h.target}`, 'flt-small');
+    toast(`${h.name}: ${next} of ${h.target}`, undoFor(id, day, prev));
+  } else {
+    fx.sound.play('untick'); fx.haptic();
+    toast(`${h.name} unticked`, undoFor(id, day, prev));
+  }
 }
 
 // ---------- actions ----------
@@ -196,9 +314,14 @@ const actions = {
     if (ui.tab === name) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
     ui.tab = name; ui.reorder = false;
     history.replaceState(null, '', '#' + name);
-    render(); window.scrollTo(0, 0);
+    render();
+    window.scrollTo(0, 0);
+    if (name === 'today') introDial();
+    main.animate([{ opacity: 0, transform: 'translateY(12px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: 'cubic-bezier(.2,.9,.2,1)' });
+    fx.haptic();
   },
   tick: tickHabit,
+  expand(sec) { ui.expanded.add(sec); patchToday(); },
   day(d) { openSheet('day', d); },
   month(m) { ui.calMonth = m; render(); },
   habit(id) { openSheet('habit', id); },
@@ -208,75 +331,79 @@ const actions = {
   archived() { ui.showArchived = !ui.showArchived; render(); },
   async 'move-up'(id) { await guard(() => store.moveHabit(id, -1)); },
   async 'move-down'(id) { await guard(() => store.moveHabit(id, 1)); },
-  async archive(id) {
+  archive(id) {
     const h = store.habit(id);
-    if (!confirm(`Archive "${h.name}"? It stops from tomorrow on, and its history stays.`)) return;
-    if (await guard(() => store.archiveHabit(id))) { closeSheet(); toast(`${h.name} archived`); }
+    ask({ title: `Archive ${h.name}?`, text: 'It stops from tomorrow on. Its history stays in your log.', yes: 'Archive quest' },
+      async () => { if (await guard(() => store.archiveHabit(id))) { closeSheet(); toast(`${h.name} archived`); } });
   },
-  async restore(id) {
+  async restore(id) { const h = store.habit(id); if (await guard(() => store.restoreHabit(id))) { closeSheet(); toast(`${h.name} restored`); } },
+  delete(id) {
     const h = store.habit(id);
-    if (await guard(() => store.restoreHabit(id))) { closeSheet(); toast(`${h.name} restored`); }
+    ask({ title: `Delete ${h.name}?`, text: 'This can\'t be undone.', yes: 'Delete quest', danger: true },
+      async () => { if (await guard(() => store.deleteHabit(id))) { closeSheet(); toast(`${h.name} deleted`); } });
   },
-  async delete(id) {
-    const h = store.habit(id);
-    if (!confirm(`Delete "${h.name}"? This can't be undone.`)) return;
-    if (await guard(() => store.deleteHabit(id))) { closeSheet(); toast(`${h.name} deleted`); }
-  },
+  'confirm-yes'() { const run = ui.confirm; ui.confirm = null; run?.(); },
   'sheet-close'() { closeSheet(); },
-  'toast-action'() { const run = toastEl._action; toastEl.classList.remove('is-on'); if (run) { run(); haptic(); } },
-  'timer-start'(id) { startTimer(id); refreshSheet(); render(); },
-  'timer-pause'(id) { pauseTimer(); refreshSheet(); render(); },
+  'toast-action'() { const run = toastEl._action; toastEl.classList.remove('is-on'); run?.(); fx.haptic(); },
+  'timer-start'(id) { startTimer(id); fx.sound.play('step', 3); fx.haptic(); refreshSheet(); patchToday(); },
+  'timer-pause'() { pauseTimer(); fx.haptic(); refreshSheet(); patchToday(); },
   'timer-add'(id) {
     const h = store.habit(id); const day = store.today(); const e = store.entry(id, day);
     const add = Math.min(5, h.target - (e?.value || 0));
     if (add <= 0) return;
     const before = store.history();
     const prev = store.setEntry(id, day, (e?.value || 0) + add, { ...(e?.meta || {}), manual: (e?.meta?.manual || 0) + add });
-    haptic();
-    if ((e?.value || 0) + add >= h.target) toast(doneMessage(h, before), undoFor(id, day, prev));
     refreshSheet();
+    if ((e?.value || 0) + add >= h.target) {
+      const r = $('.timer')?.getBoundingClientRect();
+      reward(h, before, r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null);
+      toast(`${h.name} done`, undoFor(id, day, prev));
+    } else { fx.sound.play('step', 2); fx.haptic(); }
   },
   'timer-reset'(id) {
-    const day = store.today(); const e = store.entry(id, day);
-    if (!confirm('Reset today\'s time to 0?')) return;
-    store.setEntry(id, day, 0, { ...(e?.meta || {}), manual: 0 });
-    refreshSheet();
+    const h = store.habit(id);
+    ask({ title: 'Reset the timer?', text: `Today's ${h.name.toLowerCase()} time goes back to 0.`, yes: 'Reset to 0', danger: true }, () => {
+      const day = store.today(); const e = store.entry(id, day);
+      store.setEntry(id, day, 0, { ...(e?.meta || {}), manual: 0 });
+      openSheet('timer', id);
+    });
   },
-  'people-clear'(id) {
-    const day = store.today();
-    store.setEntry(id, day, 0, {});
-    closeSheet();
-  },
+  'people-clear'(id) { store.setEntry(id, store.today(), 0, {}); closeSheet(); fx.sound.play('untick'); },
   password() { openSheet('password'); },
-  async logout() {
+  logout() {
     const pending = store.outbox.length;
-    if (pending && !confirm(`${pending} change${pending === 1 ? ' hasn\'t' : 's haven\'t'} synced yet and will be lost. Log out anyway?`)) return;
-    if (!pending && !confirm('Log out of 1440 on this phone?')) return;
-    pauseTimer();
-    await backend.signOut();
-    store.clearLocal();
-    location.reload();
+    ask({ title: 'Log out?', text: pending ? `${pending} change${pending === 1 ? ' hasn\'t' : 's haven\'t'} synced yet and will be lost.` : 'You\'ll need your email and password to log back in.', yes: 'Log out', danger: true },
+      async () => { pauseTimer(); await backend.signOut(); store.clearLocal(); location.reload(); });
+  },
+  look(id) {
+    if (device.look === id || !LOOKS.some(l => l.id === id)) return;
+    device.look = id; writeDevicePrefs(device);
+    fx.sound.play('switch'); fx.haptic(2);
+    lookTransition(() => { applyDevicePrefs(device); buildBackdrop(bk, id); render(); });
+    if (store.settings && !DEMO) store.updateSettings({ prefs: { ...(store.settings.prefs || {}), look: id } }).catch(() => {});
+  },
+  toggle(which) {
+    device[which] = !device[which]; writeDevicePrefs(device);
+    if (which === 'sound') { fx.sound.on = device.sound; if (device.sound) fx.sound.play('tick'); }
+    applyDevicePrefs(device);
+    const sw = $(`[data-act="toggle:${which}"]`); sw?.setAttribute('aria-checked', String(device[which]));
+    fx.haptic();
   },
   async retry() { await boot(); },
 };
 
 async function guard(fn) {
   try { await fn(); return true; }
-  catch (err) {
-    toast(isNetworkError(err) ? 'You\'re offline. Connect to change habits.' : (ruleMessage(err) || err.message || 'Something went wrong.'));
-    return false;
-  }
+  catch (err) { toast(isNetworkError(err) ? 'You\'re offline. Connect to change quests.' : (ruleMessage(err) || err.message || 'Something went wrong.')); return false; }
 }
 
 document.addEventListener('click', (ev) => {
   const el = ev.target.closest('[data-act]');
   if (!el || el.disabled) return;
   const [name, ...rest] = el.dataset.act.split(':');
-  const arg = rest.join(':');
   const fn = actions[name];
-  if (fn) { ev.preventDefault(); fn(arg); }
+  if (fn) { ev.preventDefault(); fn(rest.join(':')); }
 });
-
 document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && ui.sheet) closeSheet(); });
 
 // ---------- forms ----------
@@ -288,20 +415,15 @@ function syncKindFields(form) {
   form.querySelector('[data-target-label]').textContent = kind === 'timer' ? 'Minutes' : 'Times a day';
   form.querySelector('[data-kind-hint]').textContent = V.kindHint(kind);
 }
-document.addEventListener('change', (ev) => {
-  if (ev.target.name === 'kind') syncKindFields(ev.target.form);
-});
+document.addEventListener('change', (ev) => { if (ev.target.name === 'kind') syncKindFields(ev.target.form); });
 
 const forms = {
   async login(form) {
-    const email = form.email.value.trim();
-    const password = form.password.value;
+    const email = form.email.value.trim(), password = form.password.value;
     if (!email || !password) { showLogin('Enter your email and password.'); return; }
     showLogin('', true);
-    try {
-      const user = await backend.signIn(email, password);
-      await startApp(user);
-    } catch (err) {
+    try { await startApp(await backend.signIn(email, password)); }
+    catch (err) {
       showLogin(isNetworkError(err) ? 'No connection. Check your internet and try again.'
         : /invalid/i.test(err.message) ? 'That email and password don\'t match. Try again.' : err.message);
     }
@@ -312,20 +434,14 @@ const forms = {
     const name = form.name.value.trim();
     const kind = form.querySelector('input[name="kind"]:checked').value;
     const days = [...form.querySelectorAll('input[name="days"]:checked')].map(i => Number(i.value)).sort();
-    let target = 1;
-    if (kind === 'count' || kind === 'timer') target = Math.round(Number(form.target.value));
-    if (!name) { err.textContent = 'Give the habit a name.'; form.name.focus(); return; }
+    const target = kind === 'count' || kind === 'timer' ? Math.round(Number(form.target.value)) : 1;
+    if (!name) { err.textContent = 'Give the quest a name.'; form.name.focus(); return; }
     if (!days.length) { err.textContent = 'Pick at least one day.'; return; }
     if (!(target >= 1 && target <= (kind === 'timer' ? 600 : 50))) { err.textContent = kind === 'timer' ? 'Minutes must be between 1 and 600.' : 'Times a day must be between 1 and 50.'; return; }
-    const fields = {
-      name, kind, target, days,
-      emoji: form.emoji.value.trim() || null,
+    const fields = { name, kind, target, days, emoji: form.emoji.value.trim() || null,
       section: form.querySelector('input[name="section"]:checked').value,
-      xp: Number(form.querySelector('input[name="xp"]:checked').value),
-      unit: kind === 'timer' ? 'min' : null,
-    };
-    const ok = await guard(() => (id ? store.updateHabit(id, fields) : store.addHabit(fields)));
-    if (ok) { closeSheet(); toast(id ? 'Habit saved' : `${name} added`); }
+      xp: Number(form.querySelector('input[name="xp"]:checked').value), unit: kind === 'timer' ? 'min' : null };
+    if (await guard(() => (id ? store.updateHabit(id, fields) : store.addHabit(fields)))) { closeSheet(); toast(id ? 'Quest saved' : `${name} added`); fx.sound.play('cleared'); }
   },
   people(form) {
     const id = form.dataset.id;
@@ -333,12 +449,16 @@ const forms = {
     const extra = form.new.value.trim();
     if (extra && !who.some(w => w.toLowerCase() === extra.toLowerCase())) who.push(extra);
     if (!who.length) { form.querySelector('[data-error]').textContent = 'Pick or type a name.'; return; }
-    const h = store.habit(id); const day = store.today(); const e = store.entry(id, day);
+    const h = store.habit(id), day = store.today(), e = store.entry(id, day);
+    closeSheet();
+    const point = rowPoint(id);
     const before = store.history();
     const prev = store.setEntry(id, day, 1, { ...(e?.meta || {}), who });
-    closeSheet();
-    haptic();
-    if (!e?.done) toast(doneMessage(h, before), undoFor(id, day, prev));
+    if (!e?.done) {
+      const row = $(`.q[data-key="${id}"]`); fx.flash(row); fx.pop(row?.querySelector('.q-emo .emo'));
+      reward(h, before, point);
+      toast(`${h.name} done`, undoFor(id, day, prev));
+    }
   },
   async password(form) {
     const err = form.querySelector('[data-error]');
@@ -357,15 +477,14 @@ document.addEventListener('submit', (ev) => {
 });
 
 // ---------- live clock ----------
-let lastDay = null;
-let lastMinute = null;
+let lastDay = null, lastMinute = null;
 setInterval(() => {
   if (!store.user || !store.settings) return;
   const now = store.now();
-  if (lastDay && now.day !== lastDay) {           // midnight: the day locks
+  if (lastDay && now.day !== lastDay) {
     const t = getTimer();
     if (t && t.day !== now.day) { saveTimerProgress(t); setTimer(null); }
-    lastDay = now.day; lastDone = null;
+    lastDay = now.day; ui.expanded.clear();
     render(); if (ui.sheet && ui.sheet.type !== 'password') closeSheet();
     toast('A new day. Yesterday is locked.');
     return;
@@ -374,47 +493,43 @@ setInterval(() => {
   const t = getTimer();
   if (t) {
     if (Math.floor(timerSeconds(t) / 60) > (store.entry(t.habit_id, t.day)?.value || 0)) saveTimerProgress(t);
-    const secs = timerSeconds(t);
-    const n = $('#timer-n'); if (n) n.textContent = V.fmtClock(secs);
-    const arc = $('#timer-arc');
-    if (arc) {
-      const f = Math.min(1, secs / 60 / arc.dataset.target);
-      arc.setAttribute('stroke-dasharray', `${(f * arc.dataset.c).toFixed(2)} ${arc.dataset.c}`);
-      arc.setAttribute('opacity', f > 0 ? '1' : '0');
+    const live = getTimer();
+    if (live) {
+      const h = store.habit(live.habit_id);
+      const secs = Math.min(h.target * 60, timerSeconds(live));
+      const n = $('#timer-n'); if (n) n.textContent = V.fmtClock(secs);
+      const arc = $('#timer-arc');
+      if (arc) { const f = Math.min(1, secs / 60 / arc.dataset.target); arc.setAttribute('stroke-dasharray', `${(f * arc.dataset.c).toFixed(2)} ${arc.dataset.c}`); arc.setAttribute('opacity', f > 0 ? '1' : '0'); }
+      const rowT = $('[data-live="row-timer"]'); if (rowT) rowT.textContent = V.fmtClock(secs);
     }
-    const rowT = $('[data-live="row-timer"]'); if (rowT) rowT.textContent = 'Timing ' + V.fmtClock(secs);
   }
   if (now.minutes !== lastMinute) {
     lastMinute = now.minutes;
-    const m = $('#dial-min'); if (m) m.textContent = 1440 - now.minutes;
+    const left = 1440 - now.minutes;
+    const m = $('#dial-min'); if (m) { m.textContent = left; m.dataset.text = left; }
+    const d = $('#core-date'); if (d) d.textContent = V.dateText(now.day, now);
     const a = V.timeArc(now.minutes);
-    const tEl = $('#dial-time'); if (tEl) { tEl.setAttribute('stroke-dasharray', a.dash); tEl.setAttribute('stroke-dashoffset', a.offset); }
-    const dot = $('#dial-now'); if (dot) { dot.setAttribute('cx', a.x); dot.setAttribute('cy', a.y); }
-    if (now.minutes === AVOID_CONFIRM_MINUTE && ui.tab === 'today') render();
+    const tr = $('#time-ring'); if (tr) { tr.setAttribute('stroke-dasharray', a.dash); tr.setAttribute('stroke-dashoffset', a.offset); }
+    const dot = $('#time-dot'); if (dot) { dot.setAttribute('cx', a.x); dot.setAttribute('cy', a.y); }
+    if (now.minutes === AVOID_CONFIRM_MINUTE && ui.tab === 'today') patchToday();
   }
 }, 1000);
 
 setInterval(() => { if (store.user) store.flush(); }, 20000);
 addEventListener('online', () => store.flush());
 document.addEventListener('visibilitychange', async () => {
-  if (document.visibilityState !== 'visible' || !store.user) return;
-  render();
-  if (Date.now() - store.lastRefresh > 60000) { await store.refresh().catch(() => {}); }
+  document.documentElement.classList.toggle('is-away', document.hidden);
+  if (document.hidden || !store.user) return;
+  if (Date.now() - store.lastRefresh > 60000) await store.refresh().catch(() => {});
   store.flush();
 });
 
 store.addEventListener('change', (ev) => {
   const d = ev.detail;
-  if (d && d.type === 'rejected') toast(d.message);
+  if (d && d.type === 'rejected') { toast(d.message); fx.sound.play('deny'); return; }
   if (!ui.booted) return;
-  if (d === 'sync' || d === 'synced') {           // only the sync line changes
-    const holder = $('.top > div');
-    if (ui.tab === 'today' && holder) {
-      holder.querySelector('.top-sub')?.remove();
-      holder.insertAdjacentHTML('beforeend', V.syncLine(ctx()));
-    }
-    return;
-  }
+  if (d === 'sync' || d === 'synced' || d === 'offline') { updateSyncLine(); return; }
+  if (d === 'tick' || d === 'refresh') { if (ui.tab === 'today') patchToday(); else render(); if (ui.sheet?.type === 'day' || ui.sheet?.type === 'habit') refreshSheet(); return; }
   render();
 });
 
@@ -422,23 +537,24 @@ store.addEventListener('change', (ev) => {
 function showLogin(error = '', busy = false) {
   tabbarEl.hidden = true;
   main.innerHTML = V.login({ error, busy });
-  if (!busy) { const f = $('input[name="email"]'); if (f && !error) f.focus(); }
+  if (!busy && !error) $('input[name="email"]')?.focus();
 }
-
 async function startApp(user) {
   ui.booted = true;
   try { await store.start(user); }
   catch (err) { toast(ruleMessage(err) || err.message || 'Couldn\'t load your data.'); }
+  const serverLook = store.settings?.prefs?.look;
+  if (serverLook && !localStorage.getItem('1440:device') && serverLook !== device.look) {
+    device.look = serverLook; writeDevicePrefs(device); applyDevicePrefs(device); buildBackdrop(bk, serverLook);
+  }
   render();
+  if (ui.tab === 'today') introDial();
 }
-
 async function boot() {
   const user = await backend.getUser().catch(() => null);
   if (!user) { showLogin(); return; }
   await startApp(user);
 }
 
-if ('serviceWorker' in navigator && location.protocol === 'https:') {
-  navigator.serviceWorker.register('./sw.js').catch(() => {});
-}
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('./sw.js').catch(() => {});
 boot();

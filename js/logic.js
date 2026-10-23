@@ -87,6 +87,20 @@ export function levelFromXP(xp) {
   return { level: n, xp, base, next, into: xp - base, need: next - base, pct: (xp - base) / (next - base) };
 }
 
+// ---------- ranks ----------
+export const RANKS = [
+  { min: 1,  name: 'Rookie' },
+  { min: 3,  name: 'Runner' },
+  { min: 6,  name: 'Operator' },
+  { min: 10, name: 'Phantom' },
+  { min: 15, name: 'Legend' },
+];
+export function rankFor(level) {
+  let r = RANKS[0];
+  for (const x of RANKS) if (level >= x.min) r = x;
+  return r;
+}
+
 // ---------- history: per-day results, streaks, shields, XP ----------
 /**
  * habits:  [{id, start_date, archived_on, days, target, xp, ...}]

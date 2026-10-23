@@ -93,6 +93,10 @@ export class Store extends EventTarget {
   async refresh() {
     try {
       const data = await this.backend.loadAll();
+      const sig = JSON.stringify([data.settings, data.habits, data.days.length, data.entries.length,
+        data.entries.reduce((m, e) => (e.updated_at > m ? e.updated_at : m), ''), data.entries.reduce((n, e) => n + e.value, 0)]);
+      if (sig === this.sig && !this.outbox.length) { this.online = true; this.lastRefresh = Date.now(); return; }
+      this.sig = sig;
       this.settings = data.settings;
       this.habits = data.habits;
       this.entries = new Map(data.entries.map(e => [key(e.habit_id, e.day), e]));
@@ -178,6 +182,7 @@ export class Store extends EventTarget {
           // The database refused it (day closed, etc.): drop it and restore the server's version.
           this.outbox = this.outbox.filter(o => o !== op);
           this.emit({ type: 'rejected', message: ruleMessage(err) || err.message, op });
+          this.sig = null; // local state differs from the server now, so reload it in full
           await this.refresh().catch(() => {});
         }
         this.persist();

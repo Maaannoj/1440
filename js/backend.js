@@ -12,7 +12,7 @@ export const DEFAULT_HABITS = [
   { name: 'Walk',             emoji: '🚶', section: 'day',     kind: 'check', xp: 10, auto_steps: true },
   { name: 'Work out',         emoji: '🏋️', section: 'day',     kind: 'timer', target: 15, unit: 'min', xp: 25 },
   { name: 'Read',             emoji: '📖', section: 'day',     kind: 'timer', target: 30, unit: 'min', xp: 25 },
-  { name: 'Talk to parents',  emoji: '📞', section: 'day',     kind: 'check', xp: 10 },
+  { name: 'Talk to parents',  emoji: '👪', section: 'day',     kind: 'check', xp: 10 },
   { name: 'Talk to a friend', emoji: '💬', section: 'day',     kind: 'people', xp: 10 },
   { name: 'Face wash',        emoji: '🧼', section: 'night',   kind: 'check', xp: 5 },
   { name: 'No nail biting',   emoji: '✋', section: 'night',   kind: 'avoid', xp: 25 },

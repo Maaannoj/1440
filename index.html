@@ -1,12 +1,11 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-look="redline" data-calm="0">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>1440</title>
-  <meta name="description" content="A personal daily habit tracker. Every minute counts.">
-  <meta name="theme-color" content="#EEF1ED" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#0F1A22" media="(prefers-color-scheme: dark)">
+  <meta name="description" content="A personal daily quest tracker. Every minute counts.">
+  <meta name="theme-color" content="#000000">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="1440">
@@ -15,11 +14,26 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="apple-touch-icon" href="./icons/icon-180.png">
   <link rel="icon" type="image/png" href="./icons/icon-192.png">
+  <link rel="preload" href="./fonts/chakra-petch-latin-700-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="./fonts/chakra-petch-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="./fonts/share-tech-mono-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <script>
+    // apply the saved look before anything paints, so there's no flash of the wrong theme
+    try {
+      var p = JSON.parse(localStorage.getItem('1440:device') || '{}');
+      var q = new URLSearchParams(location.search).get('look');
+      if (q || p.look) document.documentElement.dataset.look = q || p.look;
+      if (p.calm) document.documentElement.dataset.calm = '1';
+    } catch (e) {}
+  </script>
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
+  <div class="bk" id="bk" aria-hidden="true"></div>
   <main id="main" class="screen" tabindex="-1"></main>
   <nav id="tabbar" class="tabbar" aria-label="Sections" hidden></nav>
+  <div class="scanlines" aria-hidden="true"></div>
+  <div class="vignette" aria-hidden="true"></div>
   <div id="sheet-root" class="sheet-root"></div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <label id="haptic" class="haptic" aria-hidden="true"><input type="checkbox" switch tabindex="-1"></label>
