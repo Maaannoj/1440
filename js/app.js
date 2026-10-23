@@ -656,6 +656,12 @@ async function startApp(user) {
 function refreshBoard() {
   const b = store.boardRows();
   if (!b || Date.now() - b.at > 15000) store.loadBoard();
+  // safety net: if the list is still empty a few seconds later, draw or load it again
+  clearTimeout(refreshBoard.t);
+  refreshBoard.t = setTimeout(() => {
+    if (ui.tab !== 'board' || !$('.lb-skel')) return;
+    if (store.boardRows()) patchBoard(); else if (!store.boardLoading) store.loadBoard();
+  }, 4000);
 }
 function patchBoard(animate) {
   const el = $('#board-list');
