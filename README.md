@@ -20,7 +20,17 @@ art, layout, words, particles, music and sounds:
 | Notebook | Bullet-journal page with a hand-drawn tracker |
 | Pet | Mochi the chick, whose mood follows your day |
 
-New accounts get a short tutorial on first login (pick a world, add quests, try a tick).
+New accounts get a short tutorial on first login (pick a world, add quests, try a tick,
+pick a board name, turn on reminders).
+
+**Board.** Everyone with an account shows up on one board, ranked by XP for this week
+(Monday to Sunday) or all time. It shows only name, level and XP. The database works the
+XP out from real ticks, so nobody can type in a number.
+
+**Reminders.** Notifications at 12:00, 17:00 and 23:30 (each person can change or switch
+off any of them in Me). Each one says how many quests are left and how many minutes are
+left in the day, and nothing is sent once everything is done. The Home Screen icon badge
+shows how many quests are left. iPhone only allows this in the Home Screen app (iOS 16.4+).
 Music and sounds are synthesized live with Web Audio, with no audio files. All motion is
 transform/opacity, a tick patches only what changed, and Calm mode freezes the background.
 
@@ -41,6 +51,8 @@ transform/opacity, a tick patches only what changed, and Calm mode freezes the b
 | `config.js` | Supabase project URL and publishable key (public by design) |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Offline support and home-screen install |
 | `supabase/1440-setup.sql` | Database tables, row-level security and the midnight rules |
+| `supabase/1440-board-reminders.sql` | Board names and XP, the reminder queue, push keys, the every-minute check |
+| `supabase/functions/push/index.ts` | The Edge Function that sends notifications (Web Push, no secrets needed) |
 | `tests/` | Logic tests (`node tests/logic.test.mjs`) |
 
 ## The rules live in the database
@@ -49,6 +61,20 @@ transform/opacity, a tick patches only what changed, and Calm mode freezes the b
 - A closed or sealed day can't be changed.
 - Every hour, a job records each finished day's misses permanently.
 - Every row is private to the logged-in user.
+
+## Turning on the board and reminders (once)
+
+1. Supabase → SQL Editor → New query. Paste all of `supabase/1440-board-reminders.sql` and Run.
+   It makes the push keys itself, so there is nothing to copy.
+2. Supabase → Edge Functions → Deploy a new function → Via Editor. Name it `push`,
+   replace the sample code with all of `supabase/functions/push/index.ts`, and deploy.
+3. In that function's settings, turn **off** "Enforce JWT verification" and save.
+   (The database wakes it with its own token instead.)
+4. On the phone, open 1440 from the Home Screen → Me → Reminders → Turn on reminders → Allow,
+   then Send a test. A few seconds later the app says whether it was delivered.
+
+If a test says the push sender didn't pick it up, step 2 or 3 is missing.
+Supabase → Edge Functions → push → Logs shows each run.
 
 ## Adding a friend
 
@@ -59,7 +85,8 @@ Sign-ups are off, so accounts are created by hand:
 3. Send them the link, email and password. They change the password under Me → Change password.
 
 New accounts start empty, with one-tap quest ideas. Nothing from other accounts is copied.
-Every row is locked to its owner, so friends can't see each other's data in the app.
+Every row is locked to its owner, so friends can't see each other's quests or ticks in the app.
+The board is the one shared thing, and it shows only name, level and XP.
 The project owner can see all data in the Supabase dashboard.
 
 To reset a forgotten password, run this in the SQL editor:

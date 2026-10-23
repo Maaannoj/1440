@@ -213,6 +213,17 @@ export function computeHistory({ habits, entries, days, today, shieldsEnabled = 
   };
 }
 
+/** Monday of the week a day falls in. */
+export function mondayOf(day) { return addDays(day, -((dow(day) + 6) % 7)); }
+
+/** XP earned since Monday, same rule as totalXP (and as the board in the database). */
+export function weekXP(history, today) {
+  const start = mondayOf(today);
+  let xp = 0;
+  for (const [d, x] of history.perDay) if (d >= start && d <= today) xp += x.xp + (x.perfect ? XP_PERFECT_BONUS : 0);
+  return xp;
+}
+
 /** Share of scheduled days a habit was done in the last n days (today counts only once done). */
 export function habitRate(history, habitId, today, n) {
   let sched = 0, done = 0;

@@ -1,6 +1,6 @@
-// 1440 · service worker: lets the app open offline.
+// 1440 · service worker: lets the app open offline, and shows reminder notifications.
 // Network first (so updates arrive right away), cached copy when offline.
-const VERSION = '1440-v5-worlds';
+const VERSION = '1440-v6-board';
 const SHELL = [
   './', './index.html', './styles.css', './worlds.css', './config.js', './manifest.webmanifest',
   './vendor/supabase.js',
@@ -38,5 +38,34 @@ self.addEventListener('fetch', (event) => {
       if (req.mode === 'navigate') return (await cache.match('./index.html')) || Response.error();
       return Response.error();
     }
+  })());
+});
+
+// ---------- reminders ----------
+self.addEventListener('push', (event) => {
+  let d = {};
+  try { d = event.data ? event.data.json() : {}; } catch { d = { body: event.data ? event.data.text() : '' }; }
+  const shown = self.registration.showNotification(d.title || '1440', {
+    body: d.body || 'Check your quests.',
+    tag: d.tag || '1440',
+    icon: './icons/icon-192.png',
+    badge: './icons/icon-192.png',
+    data: { url: d.url || './' },
+  });
+  let badge = null;
+  const nav = self.navigator;
+  if (typeof d.badge === 'number' && nav && 'setAppBadge' in nav) {
+    badge = (d.badge > 0 ? nav.setAppBadge(d.badge) : nav.clearAppBadge()).catch(() => {});
+  }
+  event.waitUntil(Promise.all([shown, badge]));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = new URL(event.notification.data?.url || './', self.registration.scope).href;
+  event.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const w of wins) { if ('focus' in w) { await w.focus(); return; } }
+    await self.clients.openWindow(url);
   })());
 });

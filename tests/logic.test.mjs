@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { levelFromXP, computeHistory, nowIn, addDays, isActive, habitRate, evaluate } from '../js/logic.js';
+import { levelFromXP, computeHistory, nowIn, addDays, isActive, habitRate, evaluate, weekXP, mondayOf } from '../js/logic.js';
 
 let n = 0; const t = (name, fn) => { fn(); n++; console.log('PASS', name); };
 
@@ -100,6 +100,17 @@ t('habits starting later do not create misses before they existed', () => {
   const entries = [e(A, '2026-10-01', 1), e(A, '2026-10-02', 1), e(A, '2026-10-03', 1), e(B, '2026-10-03', 1)];
   const h = computeHistory({ habits: [A, B], entries, days: [], today: '2026-10-04', shieldsEnabled: false });
   assert.equal(h.perfectDays, 3);
+});
+
+t('week XP counts Monday to today, with perfect-day bonuses', () => {
+  assert.equal(mondayOf('2026-10-24'), '2026-10-19');   // Saturday → Monday
+  assert.equal(mondayOf('2026-10-19'), '2026-10-19');
+  assert.equal(mondayOf('2026-10-25'), '2026-10-19');   // Sunday belongs to the week before
+  const A = mk('A', { start_date: '2026-10-15' });
+  const entries = ['2026-10-17', '2026-10-18', '2026-10-19', '2026-10-20'].map(d => e(A, d, 1));
+  const h = computeHistory({ habits: [A], entries, days: [], today: '2026-10-21', shieldsEnabled: false });
+  // 19th and 20th: quest XP + 50 each; 21st (today) not done yet
+  assert.equal(weekXP(h, '2026-10-21'), 2 * (A.xp + 50));
 });
 
 console.log(`\n${n} logic tests passed`);

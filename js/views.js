@@ -1,6 +1,6 @@
 // 1440 · views. Each function returns HTML for one screen, part or sheet.
 // Elements that change on a tick carry data-key so the app can patch them in place.
-import { addDays, dow, habitRate, overallRate, progressOf, rankFor, RANKS, AVOID_CONFIRM_MINUTE, SHIELD_MAX, ALL_DAYS } from './logic.js';
+import { addDays, dow, habitRate, overallRate, progressOf, rankFor, RANKS, AVOID_CONFIRM_MINUTE, SHIELD_MAX, ALL_DAYS, levelFromXP, weekXP } from './logic.js';
 import { LOOKS } from './themes.js';
 import { TRACKS } from './audio.js';
 import { STARTERS } from './backend.js';
@@ -60,13 +60,14 @@ export const icon = {
   today: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>',
   log: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/></svg>',
   quests: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l2.6 5.5 6 .8-4.4 4.1 1.1 6L12 16.5 6.7 19.4l1.1-6L3.4 9.3l6-.8z"/></svg>',
+  board: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 20.5h17M9 20.5V8.5h6v12M3.5 20.5v-7H9M15 20.5v-5h5.5v5"/><path d="M12 2.6l.9 1.9 2 .3-1.5 1.4.4 2-1.8-1-1.8 1 .4-2-1.5-1.4 2-.3z"/></svg>',
   me: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.8l7.8 4.5v9L12 20.8l-7.8-4.5v-9z"/><circle cx="12" cy="11.5" r="2.6"/></svg>',
   prev: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6l-6 6 6 6"/></svg>',
   next: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 6l6 6-6 6"/></svg>',
   up: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 14.5l6-6 6 6"/></svg>',
   down: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5l6 6 6-6"/></svg>',
 };
-export const TABS = [['today', 'Today'], ['log', 'Log'], ['quests', 'Quests'], ['me', 'Me']];
+export const TABS = [['today', 'Today'], ['log', 'Log'], ['quests', 'Quests'], ['board', 'Board'], ['me', 'Me']];
 export function tabbar(active) {
   const i = TABS.findIndex(t => t[0] === active);
   return `<i class="tab-ind" id="tab-ind" style="transform:translateX(${i * 100}%)"></i>` + TABS.map(([id, label]) =>
@@ -542,6 +543,137 @@ export function peopleSheet(ctx, id) {
   </form>`;
 }
 
+// ---------- Board ----------
+const MEDAL = ['🥇', '🥈', '🥉'];
+const initial = (name) => esc((Array.from(String(name).trim())[0] || '?').toUpperCase());
+
+/** Rows to show: everyone's name, level and XP, with your own row from this phone (always current). */
+export function boardData(ctx) {
+  const b = ctx.store.boardRows();
+  if (!b) return null;
+  const h = ctx.history;
+  const mine = { name: ctx.store.settings?.display_name?.trim() || 'Player', is_me: true, xp_total: h.totalXP, xp_week: weekXP(h, ctx.now.day) };
+  const rows = b.rows.filter(r => !r.is_me).concat(mine);
+  const key = ctx.ui.boardPeriod === 'all' ? 'xp_total' : 'xp_week';
+  rows.sort((x, y) => y[key] - x[key] || y.xp_total - x.xp_total || (x.is_me ? -1 : y.is_me ? 1 : x.name.localeCompare(y.name)));
+  let rank = 0;
+  return rows.map((r, i) => {
+    if (i === 0 || rows[i - 1][key] !== r[key]) rank = i + 1;
+    return { ...r, xp: r[key], level: levelFromXP(r.xp_total).level, rank };
+  });
+}
+
+export function boardList(ctx) {
+  const rows = boardData(ctx);
+  const err = ctx.store.boardError;
+  if (!rows) {
+    if (err) return `<div class="block lb-empty"><p class="block-text">${err === 'offline' ? 'Connect to the internet to load the board.' : esc(err)}</p>
+      <div class="sheet-actions"><button class="btn btn-quiet" data-act="board-reload">Try again</button></div></div>`;
+    return `<div class="lb-skel" aria-label="Loading the board"><i></i><i></i><i></i><i></i></div>`;
+  }
+  const week = ctx.ui.boardPeriod !== 'all';
+  const pod = rows.length >= 2 ? rows.slice(0, 3) : [];
+  const order = pod.length === 3 ? [pod[1], pod[0], pod[2]] : pod.length === 2 ? [pod[1], pod[0]] : [];
+  const place = (r) => pod.indexOf(r) + 1;
+  const podium = pod.length ? `<div class="lb-podium n${pod.length}">${order.map(r => `
+    <div class="lb-pod p${place(r)}${r.is_me ? ' is-me' : ''}">
+      <em class="emo lb-medal" aria-hidden="true">${MEDAL[place(r) - 1]}</em>
+      <span class="lb-av" aria-hidden="true">${initial(r.name)}</span>
+      <b class="lb-name">${esc(r.name)}</b>
+      <span class="lb-lv">${r.is_me ? 'You · ' : ''}LV ${r.level}</span>
+      <span class="lb-xp">${num(r.xp)}<small> XP</small></span>
+      <span class="lb-step" aria-hidden="true"><i>${r.rank}</i></span>
+    </div>`).join('')}</div>` : '';
+  const rest = rows.slice(pod.length);
+  const list = rest.length ? `<ol class="lb-list" start="${pod.length + 1}">${rest.map((r, k) => `
+    <li class="lb-row${r.is_me ? ' is-me' : ''}" style="--i:${k}">
+      <span class="lb-rank">${r.rank}</span>
+      <span class="lb-av" aria-hidden="true">${initial(r.name)}</span>
+      <span class="lb-who"><b>${esc(r.name)}</b>${r.is_me ? '<small>You</small>' : ''}</span>
+      <span class="lb-lv">LV ${r.level}</span>
+      <span class="lb-xp">${num(r.xp)}<small>XP</small></span>
+    </li>`).join('')}</ol>` : '';
+  const i = rows.findIndex(r => r.is_me), me = rows[i];
+  const when = week ? ' this week' : '';
+  let line;
+  if (rows.length === 1) line = 'Just you so far. Friends show up here once they log in.';
+  else if (i === 0) {
+    const gap = me.xp - rows[1].xp;
+    line = gap > 0 ? `You're #1${when}, ${num(gap)} XP ahead of ${esc(rows[1].name)}.` : `Tied for #1${when} with ${esc(rows[1].name)}.`;
+  } else {
+    const ahead = rows[i - 1], gap = ahead.xp - me.xp;
+    line = gap > 0 ? `You're #${me.rank}${when}. ${num(gap)} XP to pass ${esc(ahead.name)}.` : `Tied with ${esc(ahead.name)}${when}.`;
+  }
+  return `${podium}<p class="lb-gap" aria-live="polite">${line}</p>${list}`;
+}
+
+export function board(ctx) {
+  const all = ctx.ui.boardPeriod === 'all';
+  const named = !!ctx.store.settings?.display_name?.trim();
+  return `
+  ${hud(ctx)}
+  <div class="page-head">
+    <h1 class="page-title"><span class="glitch" data-text="Board">Board</span></h1>
+    <div class="page-actions">${named ? '<button class="chip-btn" data-act="name-edit">Your name</button>' : ''}</div>
+  </div>
+  ${named ? '' : `<section class="block lb-namecard">
+    <h2 class="block-title">Pick your board name</h2>
+    <p class="block-text">Friends see this name with your level and XP. Nothing else.</p>
+    <form data-form="name" class="lb-nameform" novalidate>
+      <input name="name" maxlength="20" autocomplete="nickname" placeholder="Your name" aria-label="Board name" required>
+      <button class="chip-btn is-strong" type="submit">Save</button>
+    </form>
+    <p class="form-error" data-error role="alert"></p>
+  </section>`}
+  <div class="bseg" role="tablist" aria-label="Board period">
+    <i class="bseg-ind" id="bseg-ind" style="transform:translateX(${all ? 100 : 0}%)"></i>
+    <button role="tab" aria-selected="${!all}" data-act="board-period:week">This week</button>
+    <button role="tab" aria-selected="${all}" data-act="board-period:all">All time</button>
+  </div>
+  <div class="lb" id="board-list">${boardList(ctx)}</div>
+  <p class="hint center lb-foot">Only names, levels and XP are shared. Your quests stay private.${all ? '' : ' Weeks start on Monday.'}</p>`;
+}
+
+export function nameSheet(ctx) {
+  return `
+  <form data-form="name" novalidate>
+    <h2 class="sheet-title">Your board name</h2>
+    <p class="sheet-sub">Friends see this with your level and XP.</p>
+    <label class="field"><span>Name</span><input id="f-bname" name="name" maxlength="20" autocomplete="nickname" required value="${esc(ctx.store.settings?.display_name || '')}"></label>
+    <p class="form-error" data-error role="alert"></p>
+    <div class="sheet-actions"><button class="btn" type="submit">Save name</button><button class="btn btn-quiet" type="button" data-act="sheet-close">Cancel</button></div>
+  </form>`;
+}
+
+// ---------- Reminders (Me) ----------
+const REMINDERS = [
+  ['remind_morning', 'Midday', 'How many quests are left', '12:00'],
+  ['remind_evening', 'Evening', 'A nudge while there\'s still time', '17:00'],
+  ['remind_last_call', 'Last call', 'Before midnight locks the day', '23:30'],
+];
+export function remindersBlock(ctx) {
+  const s = ctx.store.settings || {};
+  const head = {
+    install: '<p class="block-text">Open 1440 from its Home Screen icon to turn on reminders. iPhone only allows notifications there.</p>',
+    unsupported: '<p class="block-text">This browser can\'t show reminders.</p>',
+    denied: '<p class="block-text">Notifications are blocked for 1440. Turn them on in iPhone Settings → Notifications → 1440, then come back here.</p>',
+    off: `<p class="block-text">Get a notification with how many quests are left. Nothing is sent once you're done for the day.</p>
+      <div class="sheet-actions"><button class="btn" data-act="push-on">Turn on reminders</button></div>`,
+    busy: '<p class="block-text push-busy">Turning on…</p>',
+    on: `<p class="push-state"><span class="push-dot" aria-hidden="true"></span>On for this phone</p>
+      <div class="sheet-actions"><button class="btn" data-act="push-test">Send a test</button><button class="btn btn-quiet" data-act="push-off">Turn off on this phone</button></div>`,
+  }[ctx.ui.push] || '';
+  const rows = REMINDERS.map(([f, label, sub, def]) => {
+    const v = s[f] ? String(s[f]).slice(0, 5) : '';
+    return `<div class="switch-row remind-row"><div><b>${label}</b><span>${sub}</span></div>
+      <div class="remind-ctl"><input class="time-in" type="time" value="${v || def}" data-remind="${f}" aria-label="${label} time"${v ? '' : ' disabled'}>
+      <button class="sw" role="switch" aria-checked="${!!v}" aria-label="${label} reminder" data-act="remind:${f}"></button></div></div>`;
+  }).join('');
+  return `<section class="block" id="reminders"><h2 class="block-title">Reminders</h2>${head}
+    <div class="remind-rows">${rows}</div>
+    <p class="hint">Only sent if something is still open. Times are the same on every phone you use.</p></section>`;
+}
+
 // ---------- world cards (Me and the tutorial) ----------
 export function worldCards(current, act = 'world') {
   return `<div class="worlds">${WORLDS.map(w => `
@@ -604,14 +736,13 @@ export function me(ctx) {
       <button class="sw" role="switch" aria-checked="${device.calm}" aria-label="Calm mode" data-act="toggle:calm"></button></div>
   </section>
 
-  <section class="block"><h2 class="block-title">Reminders</h2>
-    <ul class="plain"><li>${fmtTime(s.remind_morning)}</li><li>${fmtTime(s.remind_evening)}</li><li>${fmtTime(s.remind_last_call)}, last call if anything is left</li></ul>
-    <p class="hint">Notifications switch on in Drop 3.</p>
-  </section>
+  ${remindersBlock(ctx)}
 
   <section class="block"><h2 class="block-title">Account</h2>
     <p class="block-text">${esc(store.user?.email || '')}</p>
+    <p class="block-text acct-name">Board name: <b>${esc(s.display_name?.trim() || 'not set')}</b></p>
     <div class="sheet-actions">
+      <button class="btn btn-quiet" data-act="name-edit">${s.display_name?.trim() ? 'Change board name' : 'Set board name'}</button>
       <button class="btn btn-quiet" data-act="tutorial">Replay the tutorial</button>
       <button class="btn btn-quiet" data-act="password">Change password</button>
       <button class="btn btn-quiet btn-danger" data-act="logout">Log out</button>

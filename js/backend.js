@@ -55,6 +55,10 @@ export function isNetworkError(err) {
 /** Turn a database rule error into plain words. */
 export function ruleMessage(err) {
   const m = String(err?.message || '');
+  // the board/reminders SQL hasn't been run in Supabase yet
+  if (err?.code === 'PGRST202' || err?.code === 'PGRST204' || /could not find the (function|'display_name' column)/i.test(m)) {
+    return 'This needs the board and reminders setup in Supabase first.';
+  }
   const i = m.indexOf('1440:');
   if (i < 0) return null;
   const text = m.slice(i + 5).trim().replace(/\d{4}-\d{2}-\d{2}/g, (d) =>
@@ -137,6 +141,39 @@ export class SupabaseBackend {
     const { data, error } = await this.sb.from('entries')
       .upsert({ habit_id, day, value, meta }, { onConflict: 'habit_id,day' })
       .select().single();
+    if (error) throw error;
+    return data;
+  }
+
+  // ---------- board ----------
+  async board() {
+    const { data, error } = await this.sb.rpc('board');
+    if (error) throw error;
+    return data;
+  }
+
+  // ---------- reminders ----------
+  async pushPublicKey() {
+    const { data, error } = await this.sb.rpc('push_public_key');
+    if (error) throw error;
+    if (!data) throw new Error('1440: reminders aren\'t set up on the server yet.');
+    return data;
+  }
+  async savePush({ endpoint, p256dh, auth }) {
+    const { error } = await this.sb.rpc('save_push', { p_endpoint: endpoint, p_p256dh: p256dh, p_auth: auth });
+    if (error) throw error;
+  }
+  async removePush(endpoint) {
+    const { error } = await this.sb.from('push_subscriptions').delete().eq('endpoint', endpoint);
+    if (error) throw error;
+  }
+  async sendTestPush() {
+    const { data, error } = await this.sb.rpc('send_test_push');
+    if (error) throw error;
+    return data;
+  }
+  async testPushResult(id) {
+    const { data, error } = await this.sb.rpc('push_test_result', { p_id: id });
     if (error) throw error;
     return data;
   }
@@ -232,6 +269,24 @@ export class DemoBackend {
     this.habits = this.habits.filter(x => x.id !== id);
     for (const k of [...this.entries.keys()]) if (k.startsWith(id + '|')) this.entries.delete(k);
   }
+  async board() {
+    await delay(260);
+    if (this.offline) throw new TypeError('Load failed');
+    const me = { name: this.settings?.display_name || 'Player', is_me: true, xp_total: 0, xp_week: 0 }; // the app fills in your own XP
+    if (this.user.id === 'demo-new-user') return [me, { name: 'Manoj', is_me: false, xp_total: 2480, xp_week: 395 }];
+    return [
+      { name: 'Aisha', is_me: false, xp_total: 6120, xp_week: 610 },
+      me,
+      { name: 'Rohan', is_me: false, xp_total: 4350, xp_week: 455 },
+      { name: 'Kabir', is_me: false, xp_total: 3980, xp_week: 520 },
+      { name: 'Meera', is_me: false, xp_total: 2210, xp_week: 180 },
+      { name: 'Player', is_me: false, xp_total: 140, xp_week: 140 },
+    ];
+  }
+  async pushPublicKey() { return 'BDemoKeyOnlyNotRealBDemoKeyOnlyNotRealBDemoKeyOnlyNotRealBDemoKeyOnlyNotRealBDemoKe'; }
+  async savePush() { await delay(120); this.pushSaved = true; }
+  async removePush() { await delay(80); this.pushSaved = false; }
+  async sendTestPush() { await delay(200); return 1; }
   async upsertEntry({ habit_id, day, value, meta }) {
     await delay(80);
     if (this.offline) { const e = new TypeError('Load failed'); throw e; }

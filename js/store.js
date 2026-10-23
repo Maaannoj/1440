@@ -77,7 +77,31 @@ export class Store extends EventTarget {
     } catch { /* ignore */ }
   }
   clearLocal() {
-    try { localStorage.removeItem(this.cacheKey); localStorage.removeItem(this.outboxKey); } catch {}
+    try { localStorage.removeItem(this.cacheKey); localStorage.removeItem(this.outboxKey); localStorage.removeItem(this.boardKey); } catch {}
+  }
+
+  // ---------- board (other people's name, level and XP; cached for offline) ----------
+  get boardKey() { return `${this.cachePrefix}:board:${this.user?.id}`; }
+  boardRows() {
+    if (this._board === undefined) {
+      try { this._board = JSON.parse(localStorage.getItem(this.boardKey) || 'null'); } catch { this._board = null; }
+    }
+    return this._board;
+  }
+  async loadBoard() {
+    if (this.boardLoading) return;
+    this.boardLoading = true;
+    try {
+      const rows = await this.backend.board();
+      this._board = { rows, at: Date.now() };
+      this.boardError = null;
+      try { localStorage.setItem(this.boardKey, JSON.stringify(this._board)); } catch {}
+    } catch (err) {
+      this.boardError = isNetworkError(err) ? 'offline' : (ruleMessage(err) || err.message || 'Couldn\'t load the board.');
+    } finally {
+      this.boardLoading = false;
+    }
+    this.dispatchEvent(new CustomEvent('change', { detail: 'board' }));
   }
 
   // ---------- server ----------

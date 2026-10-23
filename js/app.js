@@ -41,9 +41,12 @@ writeDevicePrefs(device);
 // browsers only allow sound after a tap, so the first tap anywhere wakes the audio
 document.addEventListener('pointerdown', () => audio.unlock(), { capture: true });
 
+let savedPeriod = 'week';
+try { savedPeriod = localStorage.getItem('1440:boardPeriod') === 'all' ? 'all' : 'week'; } catch {}
 const ui = {
   demo: DEMO,
-  tab: ['today', 'log', 'quests', 'me'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'today',
+  tab: V.TABS.some(t => t[0] === location.hash.slice(1)) ? location.hash.slice(1) : 'today',
+  boardPeriod: savedPeriod, push: 'off', pushSynced: false,
   calMonth: null, reorder: false, showArchived: false,
   expanded: new Set(), sheet: null, confirm: null, booted: false,
   combo: 0, lastTickAt: -1e9, shownLevel: null, adding: new Set(),
@@ -94,7 +97,7 @@ function ctx() {
 }
 
 // ---------- rendering ----------
-const VIEW = { today: V.today, log: V.log, quests: V.quests, me: V.me };
+const VIEW = { today: V.today, log: V.log, quests: V.quests, board: V.board, me: V.me };
 function render() {
   if (!store.user) return;
   if (!store.settings && !store.habits.length) { main.innerHTML = V.needsConnection(); tabbarEl.hidden = true; return; }
@@ -103,6 +106,7 @@ function render() {
   main.innerHTML = VIEW[ui.tab](c);
   ui.shownLevel = c.history.level.level;
   updateTabbar();
+  updateBadge();
   document.title = ui.tab === 'today' ? '1440' : `${ui.tab[0].toUpperCase() + ui.tab.slice(1)} · 1440`;
 }
 function updateTabbar() {
@@ -164,6 +168,7 @@ function patchToday() {
   tpl.innerHTML = V.questsHtml(c);
   const inserted = morph($('#quests'), tpl);
   updateSyncLine();
+  updateBadge();
   return inserted;
 }
 function updateSyncLine() {
@@ -190,7 +195,7 @@ function openSheet(type, arg) {
   const c = ctx();
   const html = {
     day: () => V.daySheet(c, arg), habit: () => V.habitSheet(c, arg), form: () => V.habitForm(c, arg),
-    timer: () => V.timerSheet(c, arg), people: () => V.peopleSheet(c, arg), password: () => V.passwordSheet(),
+    timer: () => V.timerSheet(c, arg), people: () => V.peopleSheet(c, arg), password: () => V.passwordSheet(), name: () => V.nameSheet(c),
     confirm: () => V.confirmSheet({ ...arg, act: 'confirm-yes' }),
   }[type]();
   const wasOpen = sheetRoot.classList.contains('is-open');
@@ -328,6 +333,8 @@ const actions = {
     render();
     window.scrollTo(0, 0);
     if (name === 'today') introDial();
+    if (name === 'board') refreshBoard();
+    if (name === 'me') checkPush();
     main.animate([{ opacity: 0, transform: 'translateY(12px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: 'cubic-bezier(.2,.9,.2,1)' });
     fx.haptic(); audio.play('tab');
   },
@@ -396,7 +403,7 @@ const actions = {
   logout() {
     const pending = store.outbox.length;
     ask({ title: 'Log out?', text: pending ? `${pending} change${pending === 1 ? ' hasn\'t' : 's haven\'t'} synced yet and will be lost.` : 'You\'ll need your email and password to log back in.', yes: 'Log out', danger: true },
-      async () => { pauseTimer(); await backend.signOut(); store.clearLocal(); location.reload(); });
+      async () => { pauseTimer(); if (ui.push === 'on') await disablePush({ quiet: true }); await backend.signOut(); store.clearLocal(); location.reload(); });
   },
   look(id) {
     if ((device.look === id && device.world === 'cyberpunk') || !LOOKS.some(l => l.id === id)) return;
@@ -409,6 +416,42 @@ const actions = {
     switchTo();
   },
   tutorial() { startTutorial(); },
+  'board-period'(p) {
+    if (ui.boardPeriod === p) return;
+    ui.boardPeriod = p;
+    try { localStorage.setItem('1440:boardPeriod', p); } catch {}
+    const ind = $('#bseg-ind'); if (ind) ind.style.transform = `translateX(${p === 'all' ? 100 : 0}%)`;
+    document.querySelectorAll('[data-act^="board-period:"]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.act.endsWith(p))));
+    const foot = $('.lb-foot'); if (foot) foot.textContent = `Only names, levels and XP are shared. Your quests stay private.${p === 'all' ? '' : ' Weeks start on Monday.'}`;
+    patchBoard(true);
+    audio.play('tab'); fx.haptic();
+  },
+  'board-reload'() { store.boardError = null; patchBoard(); store.loadBoard(); },
+  'name-edit'() { openSheet('name'); setTimeout(() => $('#f-bname')?.focus(), 350); },
+  'push-on'() { enablePush(); },
+  'push-off'() { disablePush(); },
+  async 'push-test'() {
+    if (DEMO) { toast('Test sent (demo). On your phone it lands in a few seconds.'); fx.haptic(); return; }
+    let id;
+    try { id = await backend.sendTestPush(); toast('Test sent. It should land in a few seconds.'); fx.haptic(); audio.play('tick'); }
+    catch (err) { toast(isNetworkError(err) ? 'You\'re offline. Connect and try again.' : (ruleMessage(err) || err.message)); audio.play('deny'); return; }
+    // check what happened, so a setup problem says so instead of failing silently
+    setTimeout(async () => {
+      const r = await backend.testPushResult(id).catch(() => null);
+      if (!r) return;
+      const ok = { label: 'OK', run: () => {} };
+      if (!r.sent) toast('The push sender didn\'t pick it up. Check the "push" function is deployed with JWT verification off.', ok);
+      else if (/^2\d\d/.test(r.result || '')) toast('Test delivered ✓ No banner? Check Focus mode and Settings → Notifications → 1440.', ok);
+      else toast(`The push service refused it (${(r.result || 'no answer').slice(0, 60)}). Try turning reminders off and on.`, ok);
+    }, 9000);
+  },
+  async remind(field) {
+    const s = store.settings;
+    if (!s || !(field in REMIND_DEFAULT)) return;
+    const on = !!s[field];
+    const value = on ? null : ($(`[data-remind="${field}"]`)?.value || REMIND_DEFAULT[field]);
+    if (await guard(() => store.updateSettings({ [field]: value }))) { fx.haptic(); toast(on ? 'Reminder off' : `Reminder at ${V.fmtTime(value)}`); }
+  },
   toggle(which) {
     device[which] = !device[which]; writeDevicePrefs(device);
     if (which === 'sound') { audio.sfxOn = device.sound; if (device.sound) audio.play('tick'); }
@@ -445,6 +488,12 @@ function syncKindFields(form) {
   form.querySelector('[data-kind-hint]').textContent = V.kindHint(kind);
 }
 document.addEventListener('change', (ev) => { if (ev.target.name === 'kind') syncKindFields(ev.target.form); });
+document.addEventListener('change', async (ev) => {
+  const field = ev.target.dataset?.remind;
+  const v = ev.target.value;
+  if (!field || !v || String(store.settings?.[field] || '').slice(0, 5) === v) return;
+  if (await guard(() => store.updateSettings({ [field]: v }))) toast(`Reminder at ${V.fmtTime(v)}`);
+});
 
 const forms = {
   async login(form) {
@@ -487,6 +536,16 @@ const forms = {
       const row = $(`.q[data-key="${id}"]`); fx.flash(row); fx.pop(row?.querySelector('.q-emo .emo'));
       reward(h, before, point);
       toast(`${h.name} done`, undoFor(id, day, prev));
+    }
+  },
+  async name(form) {
+    const err = form.querySelector('[data-error]');
+    const name = form.name.value.trim().replace(/\s+/g, ' ');
+    if (!name) { err.textContent = 'Type a name.'; form.name.focus(); return; }
+    if (Array.from(name).length > 20) { err.textContent = 'Keep it to 20 characters.'; return; }
+    if (await guard(() => store.updateSettings({ display_name: name }))) {
+      if (ui.sheet?.type === 'name') closeSheet();
+      toast('Name saved'); audio.play('cleared'); fx.haptic();
     }
   },
   async password(form) {
@@ -554,6 +613,9 @@ document.addEventListener('visibilitychange', async () => {
   if (document.hidden || !store.user) return;
   if (Date.now() - store.lastRefresh > 60000) await store.refresh().catch(() => {});
   store.flush();
+  updateBadge();
+  if (ui.tab === 'board') refreshBoard();
+  if (ui.tab === 'me') checkPush();
 });
 
 store.addEventListener('change', (ev) => {
@@ -561,6 +623,7 @@ store.addEventListener('change', (ev) => {
   if (d && d.type === 'rejected') { toast(d.message); audio.play('deny'); return; }
   if (!ui.booted) return;
   if (d === 'sync' || d === 'synced' || d === 'offline') { updateSyncLine(); return; }
+  if (d === 'board') { if (ui.tab === 'board') patchBoard(true); return; }
   if (d === 'tick' || d === 'refresh') { if (ui.tab === 'today') patchToday(); else render(); if (ui.sheet?.type === 'day' || ui.sheet?.type === 'habit') refreshSheet(); return; }
   render();
 });
@@ -583,7 +646,122 @@ async function startApp(user) {
   }
   render();
   if (ui.tab === 'today') introDial();
+  if (ui.tab === 'board') refreshBoard();
   if (tutorialDue(store)) setTimeout(startTutorial, 350);
+  checkPush();
+  if (!DEMO && pushCapable() && !cachedKey()) backend.pushPublicKey().then(rememberKey).catch(() => {});
+}
+
+// ---------- board ----------
+function refreshBoard() {
+  const b = store.boardRows();
+  if (!b || Date.now() - b.at > 15000) store.loadBoard();
+}
+function patchBoard(animate) {
+  const el = $('#board-list');
+  if (!el) return;
+  const tpl = document.createElement('div');
+  tpl.innerHTML = V.boardList(ctx());
+  if (el.innerHTML === tpl.innerHTML) return;
+  el.replaceChildren(...tpl.childNodes);
+  if (animate && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    el.animate([{ opacity: .35 }, { opacity: 1 }], { duration: 240, easing: 'ease-out' });
+  }
+}
+
+// ---------- reminders (web push) ----------
+const REMIND_DEFAULT = { remind_morning: '12:00', remind_evening: '17:00', remind_last_call: '23:30' };
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const standalone = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+const pushCapable = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const cachedKey = () => { try { return localStorage.getItem('1440:vapid'); } catch { return null; } };
+const rememberKey = (k) => { try { localStorage.setItem('1440:vapid', k); } catch {} return k; };
+function keyBytes(b64) {
+  const s = atob(b64.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((b64.length + 3) % 4));
+  return Uint8Array.from(s, c => c.charCodeAt(0));
+}
+function sameKey(sub, b64) {
+  const k = sub.options?.applicationServerKey;
+  if (!k) return true;
+  const a = new Uint8Array(k), b = keyBytes(b64);
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+function saveSub(sub) {
+  const j = sub.toJSON();
+  return backend.savePush({ endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth });
+}
+function setPush(state) {
+  if (ui.push === state) return;
+  ui.push = state;
+  const el = $('#reminders');
+  if (el) { const tpl = document.createElement('div'); tpl.innerHTML = V.remindersBlock(ctx()); el.replaceWith(tpl.firstElementChild); }
+  tut?.refresh?.();
+}
+async function checkPush() {
+  if (!pushCapable()) return setPush(isIOS && !standalone ? 'install' : 'unsupported');
+  if (DEMO || ui.push === 'busy') return;   // the demo pretends; it never asks the browser
+  if (Notification.permission === 'denied') return setPush('denied');
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = await reg?.pushManager.getSubscription();
+    const on = !!sub && Notification.permission === 'granted';
+    setPush(on ? 'on' : 'off');
+    // keep the server in step with this phone (e.g. after logging in to another account here)
+    if (on && !ui.pushSynced) { ui.pushSynced = true; saveSub(sub).catch(() => { ui.pushSynced = false; }); }
+  } catch { /* leave as is */ }
+}
+async function enablePush() {
+  if (ui.push === 'busy') return false;
+  if (!pushCapable()) { toast(isIOS && !standalone ? 'Open 1440 from your Home Screen icon first.' : 'This browser can\'t show reminders.'); return false; }
+  if (DEMO) { setPush('on'); toast('Reminders on (demo)'); audio.play('cleared'); fx.haptic(); return true; }
+  const asking = Notification.requestPermission();   // must happen right inside the tap
+  setPush('busy');
+  try {
+    const perm = await asking;
+    if (perm !== 'granted') {
+      setPush(perm === 'denied' ? 'denied' : 'off');
+      if (perm === 'denied') toast('Notifications are blocked. Turn them on in Settings → Notifications → 1440.');
+      return false;
+    }
+    const key = cachedKey() || rememberKey(await backend.pushPublicKey());
+    const reg = await Promise.race([navigator.serviceWorker.ready,
+      new Promise((_, no) => setTimeout(() => no(new Error('the app\'s background worker isn\'t running. Close and reopen 1440, then try again.')), 8000))]);
+    let sub = await reg.pushManager.getSubscription();
+    if (sub && !sameKey(sub, key)) { await sub.unsubscribe().catch(() => {}); sub = null; }
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) });
+    await saveSub(sub);
+    ui.pushSynced = true;
+    setPush('on'); lastBadge = null; updateBadge();
+    toast('Reminders on. Tap "Send a test" to try one.'); audio.play('cleared'); fx.haptic();
+    return true;
+  } catch (err) {
+    setPush('off');
+    toast(isNetworkError(err) ? 'You\'re offline. Connect and try again.' : (ruleMessage(err) || `Couldn't turn on reminders: ${err.message || err}`));
+    return false;
+  }
+}
+async function disablePush({ quiet = false } = {}) {
+  if (!DEMO) {
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      const sub = await reg?.pushManager.getSubscription();
+      if (sub) { await backend.removePush(sub.endpoint).catch(() => {}); await sub.unsubscribe().catch(() => {}); }
+    } catch { /* nothing to undo */ }
+  }
+  ui.pushSynced = false;
+  setPush('off');
+  if ('clearAppBadge' in navigator) navigator.clearAppBadge().catch(() => {});
+  if (!quiet) { toast('Reminders off on this phone'); fx.haptic(); }
+}
+
+// the Home Screen icon shows how many quests are left today
+let lastBadge = null;
+function updateBadge() {
+  if (DEMO || !('setAppBadge' in navigator) || !store.settings || !('Notification' in window) || Notification.permission !== 'granted') return;
+  const left = store.history().perDay.get(store.today())?.missed.length || 0;
+  if (left === lastBadge) return;
+  lastBadge = left;
+  (left > 0 ? navigator.setAppBadge(left) : navigator.clearAppBadge()).catch(() => {});
 }
 
 // ---------- switching worlds ----------
@@ -605,6 +783,9 @@ function startTutorial() {
     store, device, audio, fx,
     setWorld: (id) => actions.world(id),
     addStarter: async (i) => guard(() => store.addHabit({ ...STARTERS[i] })),
+    saveName: (name) => store.updateSettings({ display_name: name }).catch(() => {}),
+    enablePush: () => enablePush(),
+    pushState: () => ui.push,
     onClose: () => {
       tut = null;
       if (ui.tab !== 'today') actions.tab('today'); else { render(); introDial(); }

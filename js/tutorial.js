@@ -1,10 +1,10 @@
-// 1440 · first-login tutorial. Six short steps; shown once to new accounts, replayable from Me.
+// 1440 · first-login tutorial. Seven short steps; shown once to new accounts, replayable from Me.
 import { STARTERS } from './backend.js';
 import { RANKS } from './logic.js';
 import { worldOf } from './worlds.js';
 import { worldCards, esc } from './views.js';
 
-const STEPS = ['welcome', 'world', 'quests', 'tick', 'level', 'ready'];
+const STEPS = ['welcome', 'world', 'quests', 'tick', 'level', 'board', 'ready'];
 const doneKey = (uid) => `1440:tut:${uid}`;
 
 export function shouldShow(store) {
@@ -16,7 +16,7 @@ export function shouldShow(store) {
 }
 
 /**
- * api: { store, device, setWorld(id), addStarter(i) → Promise<bool>, toggle(which), audio, fx, onClose() }
+ * api: { store, device, setWorld(id), addStarter(i) → Promise<bool>, saveName(name), enablePush(), pushState(), audio, fx, onClose() }
  */
 export function openTutorial(api) {
   const root = document.createElement('div');
@@ -27,6 +27,7 @@ export function openTutorial(api) {
   document.body.appendChild(root);
   document.body.classList.add('has-tut');
   let step = 0, practiced = false;
+  let boardName = api.store.settings?.display_name || '';
   const added = new Set(api.store.habits.map(h => h.name.toLowerCase()));
 
   const left = () => 1440 - api.store.now().minutes;
@@ -74,6 +75,18 @@ export function openTutorial(api) {
         <li><em class="emo" aria-hidden="true">🔥</em><span><b>Streaks</b> Perfect days in a row build your streak.</span></li>
         <li><em class="emo" aria-hidden="true">🛡️</em><span><b>Shields</b> Every 7 perfect days earns a shield. It saves your streak from one bad day.</span></li>
       </ul>`;
+    if (id === 'board') return `
+      <h2 class="tut-title">The board</h2>
+      <p class="tut-text">Everyone on 1440 shows up on the Board, ranked by XP each week. Friends only see your name, level and XP. Never your quests.</p>
+      <div class="tut-podium" aria-hidden="true">
+        <span class="tp p2"><em class="emo">🥈</em><i></i></span><span class="tp p1"><em class="emo">🥇</em><i></i></span><span class="tp p3"><em class="emo">🥉</em><i></i></span>
+      </div>
+      <label class="field tut-name"><span>Your name on the board</span>
+        <input id="tut-name" maxlength="20" autocomplete="nickname" placeholder="Your name" value="${esc(boardName)}"></label>`;
+    const push = api.pushState();
+    const pushRow = push === 'install' || push === 'unsupported' ? ''
+      : `<div class="switch-row"><div><b>Reminders</b><span>${push === 'denied' ? 'Blocked. Turn on in Settings → Notifications → 1440.' : 'At 12 PM, 5 PM and 11:30 PM, only if something is left.'}</span></div>
+          <button class="sw" role="switch" aria-checked="${push === 'on'}" aria-label="Reminders" data-act="tut-push"${push === 'on' || push === 'busy' || push === 'denied' ? ' disabled' : ''}></button></div>`;
     return `
       <div class="tut-art"><em class="emo tut-big" aria-hidden="true">${worldOf(api.device.world).icon}</em></div>
       <h2 class="tut-title">You're set</h2>
@@ -83,6 +96,7 @@ export function openTutorial(api) {
           <button class="sw" role="switch" aria-checked="${api.device.sound}" aria-label="Sound effects" data-act="toggle:sound"></button></div>
         <div class="switch-row"><div><b>Music</b><span>Your world's own track.</span></div>
           <button class="sw" role="switch" aria-checked="${!!api.device.music}" aria-label="Music" data-act="toggle:music"></button></div>
+        ${pushRow}
       </div>`;
   }
 
@@ -90,7 +104,8 @@ export function openTutorial(api) {
     const last = step === STEPS.length - 1;
     const nextLabel = last ? 'Start my day'
       : STEPS[step] === 'world' ? `Continue with ${worldOf(api.device.world).name}`
-      : STEPS[step] === 'quests' && !added.size ? 'Skip for now' : 'Next';
+      : STEPS[step] === 'quests' && !added.size ? 'Skip for now'
+      : STEPS[step] === 'board' && !boardName.trim() ? 'Skip for now' : 'Next';
     root.innerHTML = `
       <div class="tut-top">
         ${step > 0 ? '<button class="tut-link" data-act="tut-back">Back</button>' : '<span></span>'}
@@ -129,7 +144,13 @@ export function openTutorial(api) {
     setTimeout(() => requestAnimationFrame(tick), 450);
   }
 
+  function saveName() {
+    const n = boardName.trim().replace(/\s+/g, ' ');
+    if (n && Array.from(n).length <= 20 && n !== (api.store.settings?.display_name || '')) api.saveName(n);
+  }
+
   function close() {
+    if (STEPS[step] === 'board') saveName();
     try { localStorage.setItem(doneKey(api.store.user?.id), 'done'); } catch {}
     const prefs = api.store.settings?.prefs || {};
     if (api.store.settings && prefs.tutorial !== 'done') api.store.updateSettings({ prefs: { ...prefs, tutorial: 'done', world: api.device.world } }).catch(() => {});
@@ -146,8 +167,10 @@ export function openTutorial(api) {
     const arg = rest.join(':');
     if (name === 'toggle') return;          // handled by the app (sound / music switches)
     ev.preventDefault(); ev.stopPropagation();
+    if (name === 'tut-push') { api.enablePush(); return; }
     if (name === 'tut-next') {
       api.audio.play('tab'); api.fx.haptic();
+      if (STEPS[step] === 'board') saveName();
       if (step === STEPS.length - 1) { close(); return; }
       step++; render(1);
     } else if (name === 'tut-back') { step = Math.max(0, step - 1); render(-1); api.audio.play('tab'); }
@@ -180,6 +203,12 @@ export function openTutorial(api) {
     }
   }
   document.addEventListener('click', onClick, true);
+  root.addEventListener('input', (ev) => {
+    if (ev.target.id !== 'tut-name') return;
+    boardName = ev.target.value;
+    const btn = root.querySelector('[data-act="tut-next"]');
+    if (btn) btn.textContent = boardName.trim() ? 'Next' : 'Skip for now';
+  });
   render(0);
-  return { close };
+  return { close, refresh: () => { if (STEPS[step] === 'ready') render(0); } };
 }
